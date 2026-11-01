@@ -1,0 +1,297 @@
+-- // Настройки
+local DONOR_NAME = "slendxnt"
+local DONOR_ID = 2816661114
+local TOGGLE_KEY = Enum.KeyCode.K
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+
+local isSkinActive = false
+local backupStates = {}
+
+-- Безопасный поиск игрока SlendxNT
+local function getDonor()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.UserId == DONOR_ID or string.lower(p.Name) == string.lower(DONOR_NAME) then
+            if p.Character then return p.Character end
+        end
+    end
+    return nil
+end
+
+-- // Функция переодевания одной модели
+local function applySkin(m, sChar)
+    if not m or not m:IsA("Model") then return end
+    if Players:GetPlayerFromCharacter(m) then return end
+    if m.Name == "Roots" or m.Name == "TouchParts" or m.Name == "TouchRadius" then return end
+    
+    local root = m:FindFirstChild("HumanoidRootPart")
+    local tHead = m:FindFirstChild("Head")
+    if not root or not tHead then return end
+    
+    -- Если модель уже заскинена и хедлесс активен — пропускаем
+    if m:FindFirstChild("DonorAcc_Accessory (L Lawliet)") and tHead.Transparency >= 0.9 then
+        return
+    end
+    
+    local state = backupStates[m] or {
+        parts = {},
+        addedAccessories = {}
+    }
+    
+    local sHead = sChar:FindFirstChild("Head")
+    local shirt = sChar:FindFirstChildOfClass("Shirt")
+    local pants = sChar:FindFirstChildOfClass("Pants")
+    local shirtId = shirt and shirt.ShirtTemplate or "http://www.roblox.com/asset/?id=10382712726"
+    local pantsId = pants and pants.PantsTemplate or "http://www.roblox.com/asset/?id=13963923952"
+    
+    -- Очищаем мусорные остатки
+    for _, c in ipairs(m:GetChildren()) do
+        if c:IsA("Humanoid") or c.Name:find("Donor") or c.Name:find("Clone_") then
+            c:Destroy()
+        end
+    end
+    
+    -- Одежда (рубашка и джинсы)
+    for _, p in ipairs(m:GetDescendants()) do
+        if p:IsA("MeshPart") and not p.Parent:IsA("Accessory") then
+            local n = string.lower(p.Name)
+            if not state.parts[p] then
+                state.parts[p] = {TextureID = p.TextureID}
+            end
+            if n:find("torso") or n:find("arm") then
+                p.TextureID = shirtId
+            elseif n:find("leg") then
+                p.TextureID = pantsId
+            end
+        end
+    end
+    
+    -- Headless
+    if not state.parts[tHead] then
+        state.parts[tHead] = {Transparency = tHead.Transparency}
+    end
+    tHead.Transparency = 1
+    
+    -- Скрываем родные шлемы, шапки и лица товера
+    for _, item in ipairs(tHead:GetChildren()) do
+        local n = string.lower(item.Name)
+        if item:IsA("Decal") then
+            item:Destroy()
+        elseif n:find("hat") or n:find("hair") or n:find("helmet") or n:find("mask") or n:find("toxin") or n:find("handle") then
+            if item:IsA("BasePart") then
+                if not state.parts[item] then state.parts[item] = {Transparency = item.Transparency} end
+                item.Transparency = 1
+            end
+            for _, sub in ipairs(item:GetDescendants()) do
+                if sub:IsA("BasePart") or sub:IsA("Decal") then
+                    if not state.parts[sub] then state.parts[sub] = {Transparency = sub.Transparency} end
+                    sub.Transparency = 1
+                end
+            end
+        end
+    end
+    
+    -- Волосы L Lawliet (2 пары) и торт
+    for _, acc in ipairs(sChar:GetChildren()) do
+        if acc:IsA("Accessory") and not acc.Name:find("baggyJeans") then
+            local sHandle = acc:FindFirstChild("Handle")
+            if sHandle then
+                local clone = sHandle:Clone()
+                clone.Name = "DonorAcc_" .. acc.Name
+                clone.CanCollide = false
+                clone.CanTouch = false
+                clone.CanQuery = false
+                clone.Massless = true
+                clone.Transparency = 0
+                
+                for _, d in ipairs(clone:GetDescendants()) do
+                    if d:IsA("Constraint") or d:IsA("JointInstance") or d:IsA("WrapLayer") or d:IsA("WrapTarget") then
+                        d:Destroy()
+                    end
+                end
+                
+                local att = clone:FindFirstChildOfClass("Attachment")
+                local targetAttCFrame = CFrame.new(0, 0.45, 0)
+                if att and sHead:FindFirstChild(att.Name) then
+                    targetAttCFrame = sHead:FindFirstChild(att.Name).CFrame
+                end
+                
+                if att then
+                    clone.CFrame = tHead.CFrame * targetAttCFrame * att.CFrame:Inverse()
+                else
+                    clone.CFrame = tHead.CFrame
+                end
+                
+                clone.Parent = m
+                local weld = Instance.new("WeldConstraint")
+                weld.Part0 = clone
+                weld.Part1 = tHead
+                weld.Parent = clone
+                
+                table.insert(state.addedAccessories, clone)
+            end
+        end
+    end
+    
+    backupStates[m] = state
+end
+
+-- // Откат (Revert)
+local function revertSkin(m)
+    local state = backupStates[m]
+    if not state then return end
+    
+    for _, acc in ipairs(state.addedAccessories) do
+        if acc and acc.Parent then acc:Destroy() end
+    end
+    
+    for obj, props in pairs(state.parts) do
+        if obj and obj.Parent then
+            if props.TextureID ~= nil then obj.TextureID = props.TextureID end
+            if props.Transparency ~= nil then obj.Transparency = props.Transparency end
+        end
+    end
+    
+    backupStates[m] = nil
+end
+
+-- // Функция проверки всех товеров и монстров
+local function scanAll()
+    if not isSkinActive then return end
+    local sChar = getDonor()
+    if not sChar then return end
+    
+    local tFolder = Workspace:FindFirstChild("Towers")
+    if tFolder then
+        for _, t in ipairs(tFolder:GetChildren()) do applySkin(t, sChar) end
+    end
+    
+    local mFolder = Workspace:FindFirstChild("Monsters")
+    if mFolder then
+        for _, m in ipairs(mFolder:GetChildren()) do applySkin(m, sChar) end
+    end
+end
+
+-- // Фоновый цикл отслеживания улучшений и спавна (каждые 0.3 сек)
+task.spawn(function()
+    while true do
+        task.wait(0.3)
+        if isSkinActive then
+            pcall(scanAll)
+        end
+    end
+end)
+
+-- // Переключатель
+local function toggleSkin(active)
+    isSkinActive = active
+    if isSkinActive then
+        local sChar = getDonor()
+        if not sChar then
+            warn("[Skin Swapper] SlendxNT не найден!")
+            return false
+        end
+        scanAll()
+    else
+        for m in pairs(backupStates) do revertSkin(m) end
+    end
+    return true
+end
+
+-- // UI ДЛЯ ПК И DELTA IOS (АЙФОН)
+local gethui = rawget(getgenv and getgenv() or _G, "gethui")
+local uiParent = (gethui and gethui()) or CoreGui:FindFirstChild("RobloxGui") or Players.LocalPlayer:WaitForChild("PlayerGui")
+
+local oldUi = uiParent:FindFirstChild("DeltaSkinUI")
+if oldUi then oldUi:Destroy() end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "DeltaSkinUI"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = uiParent
+
+local btn = Instance.new("TextButton")
+btn.Name = "SkinToggleButton"
+btn.Size = UDim2.new(0, 140, 0, 42)
+btn.Position = UDim2.new(1, -155, 0, 110)
+btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+btn.TextSize = 13
+btn.Font = Enum.Font.GothamBold
+btn.Text = "SKIN: [ ВЫКЛ ]"
+btn.Active = true
+btn.AutoButtonColor = true
+btn.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = btn
+
+local stroke = Instance.new("UIStroke")
+stroke.Thickness = 1.5
+stroke.Color = Color3.fromRGB(80, 80, 80)
+stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+stroke.Parent = btn
+
+-- // Сенсорный драг для пальцев на iPhone (TouchDrag)
+local dragging = false
+local dragStart, startPos
+
+btn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = btn.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+btn.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        if dragging then
+            local delta = input.Position - dragStart
+            btn.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+    end
+end)
+
+local function updateBtnVisual()
+    if isSkinActive then
+        btn.Text = "SKIN: [ ВКЛ ]"
+        btn.BackgroundColor3 = Color3.fromRGB(30, 180, 75)
+        stroke.Color = Color3.fromRGB(60, 230, 110)
+    else
+        btn.Text = "SKIN: [ ВЫКЛ ]"
+        btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        stroke.Color = Color3.fromRGB(80, 80, 80)
+    end
+end
+
+local function onToggle()
+    if toggleSkin(not isSkinActive) then
+        updateBtnVisual()
+    end
+end
+
+btn.Activated:Connect(onToggle)
+UserInputService.InputBegan:Connect(function(input, processed)
+    if not processed and input.KeyCode == TOGGLE_KEY then
+        onToggle()
+    end
+end)
+
+print("[Skin Swapper] Загружено! Поддерживает ПК и Delta iOS (iPhone).")
