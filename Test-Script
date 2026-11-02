@@ -1,226 +1,679 @@
--- // ============================================================
--- //   VANTA TOWER DEFENSE ULTIMATE SCRIPT (PC & DELTA IOS)
--- // ============================================================
+local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local Lighting = game:GetService("Lighting")
 
 local lp = Players.LocalPlayer
 local pgui = lp:WaitForChild("PlayerGui")
-
-local gethui = rawget(getgenv and getgenv() or _G, "gethui")
-local uiParent = (gethui and gethui()) or CoreGui:FindFirstChild("RobloxGui") or pgui
-
--- Очистка старых GUI
-for _, name in ipairs({"VTD_AutoSkipUI", "VTD_HelperUI", "VTD_HubUI", "VTD_ESP"}) do
-    local old = uiParent:FindFirstChild(name)
-    if old then old:Destroy() end
-    local pOld = pgui:FindFirstChild(name)
-    if pOld then pOld:Destroy() end
-end
-
--- Настройки донора для скинченджера
-local DONOR_NAME = "slendxnt"
-local DONOR_ID = 2816661114
-
--- Кастомные меши для MachineGun
-local MG_MESHES = {
-    MachineGun0 = "11143209459", -- Lvl 1
-    MachineGun1 = "296191732",   -- Lvl 2
-    MachineGun2 = "8607274660"   -- Lvl 3
-}
-
--- Иконки
-local ICON_MONEY = "rbxassetid://11174899832"
-local ICON_KILLS = "rbxassetid://5726383129"
+local Mouse = lp:GetMouse()
 
 local State = {
-    AutoSkip = false,
-    Skinchanger = true,
+    AutoSkip = true,
+    AutoUpgradeAll = false,
     RainbowRadius = true,
     TowerHelper = true,
     PlayerESP = true,
-    CustomMG = true
+    MonsterESP = true,
+    CustomMG = true,
+    SentryHeight = 2.8,       -- Высота подъема турели над базой
+    SentryRotation = 180,     -- Поворот турели (градусы)
+    TowerSizing = false,
+    TowerSizeValue = 2,
+    TowerOutlines = false,
+    TowerEffects = false,
+    AntiDrone = true,
+    BreakClickDrone = false,
+    BreakPlayerInfDay = false,
+    SpeedEnabled = false,
+    TargetSpeed = 16,
+    JumpEnabled = false,
+    TargetJump = 50,
+    NoclipEnabled = false,
+    InfJumpEnabled = false,
+    JerkOffEnabled = false,
+    LoopTpEnabled = false,
+    SpectateEnabled = false,
+    FlingEnabled = false,
+    SelectedFlingMode = "Default",
+    SelectedPlayerName = "",
+    SelectedTargetName = "",
+    SelectedEmotion = "Wave",
+    EmotionSpeed = 1,
+    EmotionPlaying = false,
 }
 
--- // ------------------------------------------------------------
--- // 1. AUTO SKIP & НОВАЯ ЛОГИКА 0% COMPLETE
--- // ------------------------------------------------------------
--- Логика: если 3 секунды новые монстры не появляются, значит волна
--- доспавнилась и идут последние. Если монстров 0 -> пишет 100% Complete.
+local DONOR_NAME = "slendxnt"
+local DONOR_ID = 2816661114
+local SHIRT_ID = "http://www.roblox.com/asset/?id=10382712726"
+local PANTS_ID = "http://www.roblox.com/asset/?id=13963923952"
 
-local skipGui = Instance.new("ScreenGui")
-skipGui.Name = "VTD_AutoSkipUI"
-skipGui.ResetOnSpawn = false
-skipGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-skipGui.Parent = uiParent
+local ICON_MONEY = "rbxassetid://11174899832"
+local ICON_KILLS = "rbxassetid://6212494454"
 
-local skipFrame = Instance.new("Frame")
-skipFrame.Size = UDim2.new(0, 160, 0, 52)
-skipFrame.Position = UDim2.new(0.5, -80, 0, 12)
-skipFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
-skipFrame.BackgroundTransparency = 0.25
-skipFrame.Active = true
-skipFrame.Parent = skipGui
-Instance.new("UICorner", skipFrame).CornerRadius = UDim.new(0, 8)
+-- Sentry Assets (TF2 Models)
+local MG_MODELS = {
+    MachineGun0 = "11143209459",      -- Lvl 1: Tf2 Sentry Rig
+    MachineGun1 = "296191732",        -- Lvl 2: Level 2 Sentry
+    MachineGun2 = "75708274738804"    -- Lvl 3: Level III Sentry
+}
+local loadedMGAssets = {}
 
-local pLabel = Instance.new("TextLabel")
-pLabel.Size = UDim2.new(1, 0, 0, 22)
-pLabel.Position = UDim2.new(0, 0, 0, 3)
-pLabel.BackgroundTransparency = 1
-pLabel.Font = Enum.Font.GothamBlack
-pLabel.TextSize = 15
-pLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-pLabel.Text = "0% Complete"
-pLabel.Parent = skipFrame
-local s1 = Instance.new("UIStroke", pLabel)
-s1.Thickness = 2
-s1.Color = Color3.fromRGB(0, 0, 0)
+-- Сервисы игры
+local SharedClass = nil
+local WorldClickingService = nil
+pcall(function()
+    SharedClass = require(ReplicatedStorage.staticModules.SharedClass)
+    WorldClickingService = require(ReplicatedStorage.Services.WorldClickingService)
+end)
 
-local skipRow = Instance.new("TextButton")
-skipRow.Size = UDim2.new(1, -16, 0, 24)
-skipRow.Position = UDim2.new(0, 8, 0, 24)
-skipRow.BackgroundTransparency = 1
-skipRow.Text = ""
-skipRow.Parent = skipFrame
-
-local skipText = Instance.new("TextLabel")
-skipText.Size = UDim2.new(0, 90, 1, 0)
-skipText.Position = UDim2.new(0, 8, 0, 0)
-skipText.BackgroundTransparency = 1
-skipText.Font = Enum.Font.GothamBold
-skipText.TextSize = 14
-skipText.TextColor3 = Color3.fromRGB(255, 255, 255)
-skipText.Text = "Auto Skip"
-skipText.TextXAlignment = Enum.TextXAlignment.Left
-skipText.Parent = skipRow
-local s2 = Instance.new("UIStroke", skipText)
-s2.Thickness = 1.5
-s2.Color = Color3.fromRGB(0, 0, 0)
-
-local skipBox = Instance.new("Frame")
-skipBox.Size = UDim2.new(0, 18, 0, 18)
-skipBox.Position = UDim2.new(1, -22, 0.5, -9)
-skipBox.BackgroundColor3 = Color3.fromRGB(220, 30, 30)
-skipBox.BorderSizePixel = 0
-skipBox.Parent = skipRow
-Instance.new("UICorner", skipBox).CornerRadius = UDim.new(0, 4)
-
-local function toggleSkip()
-    State.AutoSkip = not State.AutoSkip
-    skipBox.BackgroundColor3 = State.AutoSkip and Color3.fromRGB(30, 205, 70) or Color3.fromRGB(220, 30, 30)
+local statsTowers = ReplicatedStorage:FindFirstChild("Stats") and ReplicatedStorage.Stats:FindFirstChild("Towers")
+local towerStatsCache = {}
+if statsTowers then
+    for _, ch in ipairs(statsTowers:GetChildren()) do
+        if ch:IsA("ModuleScript") then
+            pcall(function() towerStatsCache[ch.Name] = require(ch) end)
+        end
+    end
 end
 
-skipRow.Activated:Connect(toggleSkip)
+local skinBackups = {}
+local OrgDestroyHeight = Workspace.FallenPartsDestroyHeight
 
--- Отслеживание прогресса волны
-local maxMonstersSeen = 0
-local lastMonsterSpawnTick = tick()
-local previousMonsterCount = 0
+local function fireClick(btn)
+    if not btn then return end
+    if btn:IsA("Frame") then
+        btn = btn:FindFirstChild("Button") or btn:FindFirstChildOfClass("TextButton") or btn:FindFirstChildOfClass("ImageButton") or btn
+    end
+    if not (btn:IsA("TextButton") or btn:IsA("ImageButton")) then return end
+    local firesig = rawget(getgenv and getgenv() or _G, "firesignal")
+    if firesig then
+        pcall(firesig, btn.MouseButton1Click)
+        pcall(firesig, btn.Activated)
+    else
+        for _, c in pairs(getconnections(btn.MouseButton1Click)) do pcall(c.Fire, c) end
+        for _, c in pairs(getconnections(btn.Activated)) do pcall(c.Fire, c) end
+    end
+end
 
-task.spawn(function()
-    while true do
-        task.wait(0.12)
-        local mFolder = Workspace:FindFirstChild("Monsters")
-        local currentMonsters = 0
-        if mFolder then
-            for _, m in ipairs(mFolder:GetChildren()) do
-                if m:IsA("Model") and m.Name ~= "TouchParts" then
-                    currentMonsters = currentMonsters + 1
+local function parseNumber(str)
+    if not str then return 0 end
+    local cleaned = str:gsub("%D+", "")
+    return tonumber(cleaned) or 0
+end
+
+local function getMoney()
+    local mainGui = pgui:FindFirstChild("MainGui")
+    local counter = mainGui and mainGui:FindFirstChild("MoneyFrame") and mainGui.MoneyFrame:FindFirstChild("moneyCounter")
+    return counter and parseNumber(counter.Text) or 0
+end
+
+local function getUpgradeCost()
+    local mainGui = pgui:FindFirstChild("MainGui")
+    local upg = mainGui and mainGui:FindFirstChild("TowerFrame")
+        and mainGui.TowerFrame:FindFirstChild("FrameUpgrader")
+        and mainGui.TowerFrame.FrameUpgrader:FindFirstChild("FrameStars")
+        and mainGui.TowerFrame.FrameUpgrader.FrameStars:FindFirstChild("upgrade")
+    local costLbl = upg and upg:FindFirstChild("cost")
+    return costLbl and parseNumber(costLbl.Text) or 0
+end
+
+local function selectTower(targetModel)
+    if not targetModel or not SharedClass or not WorldClickingService then return false end
+    local tpFolder = Workspace:FindFirstChild("Towers") and Workspace.Towers:FindFirstChild("TouchParts")
+    if not tpFolder then return false end
+
+    for _, tp in ipairs(tpFolder:GetChildren()) do
+        local uid = tp:GetAttribute("uid")
+        if uid then
+            local obj = SharedClass.GetById(uid)
+            if obj and (obj.model == targetModel or obj.instance == targetModel) then
+                pcall(function()
+                    WorldClickingService.Select(obj)
+                end)
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function doUpgrade(targetModel)
+    if targetModel then
+        selectTower(targetModel)
+        task.wait(0.04)
+    end
+
+    local mainGui = pgui:FindFirstChild("MainGui")
+    if not mainGui then return false end
+
+    local sm = mainGui:FindFirstChild("StarModule", true)
+    local smMod = sm and require(sm)
+    if smMod and smMod.ClickButton then
+        pcall(smMod.ClickButton)
+    end
+
+    local upgBtn = mainGui:FindFirstChild("TowerFrame")
+        and mainGui.TowerFrame:FindFirstChild("FrameUpgrader")
+        and mainGui.TowerFrame.FrameUpgrader:FindFirstChild("FrameStars")
+        and mainGui.TowerFrame.FrameUpgrader.FrameStars:FindFirstChild("upgrade")
+        and mainGui.TowerFrame.FrameUpgrader.FrameStars.upgrade:FindFirstChild("upgradeButton")
+    if upgBtn then fireClick(upgBtn) end
+    return true
+end
+
+local function doSell(targetModel)
+    if targetModel then
+        selectTower(targetModel)
+        task.wait(0.04)
+    end
+
+    local mainGui = pgui:FindFirstChild("MainGui")
+    if not mainGui then return false end
+
+    local tm = mainGui:FindFirstChild("TowerModule", true)
+    local tmMod = tm and require(tm)
+    if tmMod and tmMod.SellTower then
+        pcall(tmMod.SellTower)
+    end
+
+    local sellBtn = mainGui:FindFirstChild("TowerFrame") and mainGui.TowerFrame:FindFirstChild("SellButton")
+    if sellBtn then fireClick(sellBtn) end
+
+    task.wait(0.06)
+    local prompt = mainGui:FindFirstChild("ActionPrompt")
+    if prompt and prompt.Visible then
+        local cf = prompt:FindFirstChild("choiceFrame")
+        local conf = cf and (cf:FindFirstChild("confirm") or cf:FindFirstChild("Yes") or cf:FindFirstChild("Button"))
+        if conf then fireClick(conf) end
+    end
+    return true
+end
+
+-- // Подсчет общей стоимости апгрейда и продажи всех башен
+local function getTowersFinancials()
+    if not SharedClass then return 0, 0, 0, 0 end
+    local tpFolder = Workspace:FindFirstChild("Towers") and Workspace.Towers:FindFirstChild("TouchParts")
+    if not tpFolder then return 0, 0, 0, 0 end
+
+    local totalSell = 0
+    local totalUpgrade = 0
+    local ownedCount = 0
+    local upgradableCount = 0
+
+    for _, tp in ipairs(tpFolder:GetChildren()) do
+        local uid = tp:GetAttribute("uid")
+        if uid then
+            local obj = SharedClass.GetById(uid)
+            if obj and obj.isOwner then
+                ownedCount = ownedCount + 1
+                totalSell = totalSell + (obj.costSell or 0)
+
+                local nextStar = (obj.starCount or 0) + 1
+                local data = towerStatsCache[obj.name]
+                if data then
+                    local sData = data["star" .. nextStar]
+                    if sData and sData.cost then
+                        totalUpgrade = totalUpgrade + sData.cost
+                        upgradableCount = upgradableCount + 1
+                    end
                 end
             end
         end
+    end
+    return totalUpgrade, totalSell, ownedCount, upgradableCount
+end
 
-        -- Новые монстры появились
-        if currentMonsters > previousMonsterCount then
-            lastMonsterSpawnTick = tick()
-            if currentMonsters > maxMonstersSeen then
-                maxMonstersSeen = currentMonsters
+local function upgradeAllTowers()
+    local tFolder = Workspace:FindFirstChild("Towers")
+    if not tFolder then return end
+    for _, t in ipairs(tFolder:GetChildren()) do
+        if t:IsA("Model") and t.Name ~= "TouchParts" and t.Name ~= "TouchRadius" and t.Name ~= "Roots" then
+            doUpgrade(t)
+            task.wait(0.05)
+        end
+    end
+end
+
+local function sellAllTowers()
+    local tFolder = Workspace:FindFirstChild("Towers")
+    if not tFolder then return end
+    for _, t in ipairs(tFolder:GetChildren()) do
+        if t:IsA("Model") and t.Name ~= "TouchParts" and t.Name ~= "TouchRadius" and t.Name ~= "Roots" then
+            doSell(t)
+            task.wait(0.06)
+        end
+    end
+end
+
+local myDroneModel = nil
+local myDroneSeat = nil
+
+local function getDroneButton()
+    local rp = pgui:FindFirstChild("MainGui")
+        and pgui.MainGui:FindFirstChild("Overlay")
+        and pgui.MainGui.Overlay:FindFirstChild("RightPanel")
+    local db = rp and rp:FindFirstChild("DroneButton")
+    if db then
+        return db:FindFirstChild("Button") or db:FindFirstChildOfClass("TextButton") or db:FindFirstChildOfClass("ImageButton") or db
+    end
+    return nil
+end
+
+local function claimDrone()
+    local btn = getDroneButton()
+    if btn then
+        fireClick(btn)
+        task.wait(0.3)
+        for _, obj in ipairs(Workspace:GetChildren()) do
+            if obj:IsA("Model") and obj ~= lp.Character then
+                local seat = obj:FindFirstChildOfClass("VehicleSeat") or obj:FindFirstChildOfClass("Seat")
+                if seat then
+                    myDroneSeat = seat
+                    myDroneModel = obj
+                    break
+                end
             end
         end
-        previousMonsterCount = currentMonsters
+    end
+end
 
-        -- Логика отображения
-        if currentMonsters == 0 then
-            pLabel.Text = "100% Complete"
-            maxMonstersSeen = 0
-        else
-            -- Если 3 секунды никто не спавнился — значит остались последние
-            if (tick() - lastMonsterSpawnTick) >= 3 and maxMonstersSeen > 0 then
-                local pct = math.clamp(math.floor(((maxMonstersSeen - currentMonsters) / maxMonstersSeen) * 100), 0, 99)
-                pLabel.Text = tostring(pct) .. "% Complete"
-            else
-                pLabel.Text = "0% Complete"
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        if State.AntiDrone and myDroneSeat then
+            local occupant = myDroneSeat.Occupant
+            if occupant and occupant.Parent ~= lp.Character then
+                local btn = getDroneButton()
+                if btn then
+                    fireClick(btn)
+                    task.wait(0.5)
+                end
             end
         end
+    end
+end)
 
-        -- Автонажатие кнопки старта
-        if State.AutoSkip then
-            pcall(function()
-                local mainGui = pgui:FindFirstChild("MainGui")
-                local startBtn = mainGui.LevelFrame.NextWaveInfo.StartFrame.Start
-                if startBtn and (startBtn.Visible or startBtn.Parent.Visible) then
-                    local firesig = rawget(getgenv and getgenv() or _G, "firesignal")
-                    if firesig then
-                        firesig(startBtn.MouseButton1Click)
-                        firesig(startBtn.Activated)
-                    else
-                        for _, c in pairs(getconnections(startBtn.MouseButton1Click)) do c:Fire() end
-                        for _, c in pairs(getconnections(startBtn.Activated)) do c:Fire() end
-                    end
+local function destroyDrone(seat)
+    local char = lp.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not hum or not root or not seat then return end
+
+    local oldPos = root.CFrame
+    local orgHeight = Workspace.FallenPartsDestroyHeight
+
+    root.CFrame = seat.CFrame * CFrame.new(0, 1.8, 0)
+    task.wait(0.08)
+    pcall(seat.Sit, seat, hum)
+
+    local startSit = tick()
+    while seat.Occupant ~= hum and (tick() - startSit) < 0.6 do
+        task.wait(0.03)
+    end
+
+    Workspace.FallenPartsDestroyHeight = 0/1/0
+    root.CFrame = CFrame.new(Vector3.new(0, orgHeight - 40, 0))
+    task.wait(0.4)
+
+    hum.Jump = true
+    task.wait(0.06)
+
+    root.CFrame = oldPos
+    Workspace.FallenPartsDestroyHeight = orgHeight
+end
+
+local function autoDestroyOtherDrones()
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if (obj:IsA("Seat") or obj:IsA("VehicleSeat")) and not obj.Occupant then
+            destroyDrone(obj)
+            break
+        elseif obj:IsA("Model") and obj ~= lp.Character and obj ~= myDroneModel then
+            for _, sub in ipairs(obj:GetChildren()) do
+                if (sub:IsA("Seat") or sub:IsA("VehicleSeat")) and not sub.Occupant then
+                    destroyDrone(sub)
+                    break
+                end
+            end
+        end
+    end
+end
+
+Mouse.Button1Down:Connect(function()
+    if State.BreakClickDrone and Mouse.Target then
+        local targetObj = Mouse.Target
+        if targetObj:IsA("Seat") or targetObj:IsA("VehicleSeat") then
+            local Character = lp.Character
+            local RootPart = Character and Character:FindFirstChild("HumanoidRootPart")
+            local Humanoid = Character and Character:FindFirstChildOfClass("Humanoid")
+
+            if RootPart and Humanoid and Humanoid.Health > 0 then
+                local SavedCFrame = RootPart.CFrame
+
+                targetObj:Sit(Humanoid)
+                task.wait(0.02)
+
+                pcall(function()
+                    RootPart.AssemblyAngularVelocity = Vector3.new(0, 9007, 0)
+                    targetObj.AssemblyAngularVelocity = Vector3.new(0, 9007, 0)
+                end)
+
+                task.wait(1.5)
+
+                Humanoid.Jump = true
+                task.wait(0.02)
+
+                RootPart.CFrame = SavedCFrame
+                RootPart.Velocity = Vector3.new(0, 0, 0)
+                RootPart.RotVelocity = Vector3.new(0, 0, 0)
+                pcall(function()
+                    RootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                end)
+            end
+        end
+    end
+end)
+
+local function loadMGModels()
+    for name, assetId in pairs(MG_MODELS) do
+        if not loadedMGAssets[name] then
+            task.spawn(function()
+                local ok, res = pcall(game.GetObjects, game, "rbxassetid://" .. assetId)
+                if ok and res and res[1] then
+                    loadedMGAssets[name] = res[1]
                 end
             end)
         end
     end
-end)
+end
+loadMGModels()
 
--- // ------------------------------------------------------------
--- // 2. РАДУЖНЫЙ РАДИУС (ПОСТОЯННЫЙ + workspace.Towers.Part)
--- // ------------------------------------------------------------
--- Работает всегда, пока открыта башня или выбирается точка установки.
--- Если точка запрещена (красный цвет 255, 51, 51) — радуга тормозится на красном.
-
-RunService.RenderStepped:Connect(function()
-    if not State.RainbowRadius then return end
-    local rainbow = Color3.fromHSV((tick() * 0.7) % 1, 1, 1)
-
-    -- 1. Радиус выбранной башни (workspace.Towers.Part)
-    local tFolder = Workspace:FindFirstChild("Towers")
-    if tFolder then
-        local tPart = tFolder:FindFirstChild("Part")
-        if tPart and tPart:IsA("BasePart") then
-            tPart.Color = rainbow
+local function hideNativeMGParts(t)
+    for _, d in ipairs(t:GetDescendants()) do
+        if (d:IsA("BasePart") or d:IsA("Decal")) and not d:IsDescendantOf(t:FindFirstChild("CustomSentryRig") or Workspace) then
+            d.Transparency = 1
         end
-        local touchRad = tFolder:FindFirstChild("TouchRadius")
-        if touchRad then
-            for _, rPart in ipairs(touchRad:GetChildren()) do
-                if rPart:IsA("BasePart") then rPart.Color = rainbow end
+    end
+end
+
+local function showNativeMGParts(t)
+    for _, d in ipairs(t:GetDescendants()) do
+        if (d:IsA("BasePart") or d:IsA("Decal")) and not d:IsDescendantOf(t:FindFirstChild("CustomSentryRig") or Workspace) then
+            if d.Name ~= "HumanoidRootPart" then
+                d.Transparency = 0
             end
         end
     end
+end
 
-    -- 2. Радиус при установке башни в пространстве
-    for _, obj in ipairs(Workspace:GetChildren()) do
-        if obj:IsA("Model") and obj ~= lp.Character and obj.Name ~= "Towers" and obj.Name ~= "Monsters" then
-            local rPart = obj:FindFirstChild("Part") or obj:FindFirstChild("TouchPart") or obj:FindFirstChild("RadiusPart")
-            if rPart and rPart:IsA("BasePart") then
-                local r, g, b = rPart.Color.R * 255, rPart.Color.G * 255, rPart.Color.B * 255
-                -- Проверка на красный цвет запрета установки (Persimmon)
-                if r > 190 and g < 100 and b < 100 then
-                    -- Оставляем красный
+local function updateMachineGuns()
+    local towers = Workspace:FindFirstChild("Towers")
+    if not towers then return end
+
+    for _, t in ipairs(towers:GetChildren()) do
+        for mgName, _ in pairs(MG_MODELS) do
+            if t.Name:find(mgName) then
+                if State.CustomMG then
+                    hideNativeMGParts(t)
+
+                    local template = loadedMGAssets[mgName]
+                    local upPart = t:FindFirstChild("Up") or t:FindFirstChild("Gun") or t:FindFirstChild("HumanoidRootPart")
+                    local sentry = t:FindFirstChild("CustomSentryRig")
+
+                    if template and upPart and not sentry then
+                        sentry = template:Clone()
+                        sentry.Name = "CustomSentryRig"
+
+                        local cf, _ = sentry:GetBoundingBox()
+                        local rootPart = Instance.new("Part")
+                        rootPart.Name = "SentryRoot"
+                        rootPart.Size = Vector3.new(1, 1, 1)
+                        rootPart.Transparency = 1
+                        rootPart.CanCollide = false
+                        rootPart.Anchored = true
+                        rootPart.CFrame = cf
+                        rootPart.Parent = sentry
+                        sentry.PrimaryPart = rootPart
+
+                        for _, p in ipairs(sentry:GetDescendants()) do
+                            if p:IsA("BasePart") then
+                                p.CanCollide = false
+                                p.CanTouch = false
+                                p.CanQuery = false
+                                p.Massless = true
+                                p.Anchored = true
+                            end
+                        end
+
+                        sentry.Parent = t
+
+                        local heightOffset = State.SentryHeight or 2.8
+                        local rotOffset = math.rad(State.SentryRotation or 180)
+                        sentry:PivotTo(upPart.CFrame * CFrame.new(0, heightOffset, 0) * CFrame.Angles(0, rotOffset, 0))
+                    end
                 else
-                    rPart.Color = rainbow
+                    local sentry = t:FindFirstChild("CustomSentryRig")
+                    if sentry then sentry:Destroy() end
+                    showNativeMGParts(t)
                 end
             end
         end
     end
+end
+
+-- // Синхронизация поворота турели каждый кадр в RenderStepped (куда смотрит Up — туда и турель)
+RunService.RenderStepped:Connect(function()
+    if not State.CustomMG then return end
+    local towers = Workspace:FindFirstChild("Towers")
+    if not towers then return end
+
+    for _, t in ipairs(towers:GetChildren()) do
+        if t.Name:find("MachineGun") then
+            local upPart = t:FindFirstChild("Up") or t:FindFirstChild("Gun")
+            local sentry = t:FindFirstChild("CustomSentryRig")
+            if sentry and upPart and sentry.PrimaryPart then
+                local heightOffset = State.SentryHeight or 2.8
+                local rotOffset = math.rad(State.SentryRotation or 180)
+                sentry:PivotTo(upPart.CFrame * CFrame.new(0, heightOffset, 0) * CFrame.Angles(0, rotOffset, 0))
+            end
+        end
+    end
 end)
 
--- // ------------------------------------------------------------
--- // 3. СКИНЧЕНДЖЕР (РАБОЧИЙ МЕТОД СО СЛЕНДОМ)
--- // ------------------------------------------------------------
+local function setTowerScale(model, scale)
+    if not model or not model:IsA("Model") then return end
+    if not model.PrimaryPart then
+        model.PrimaryPart = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChildOfClass("BasePart")
+    end
+    if model.PrimaryPart then
+        pcall(function() model:ScaleTo(scale) end)
+    end
+end
+
+local function updateTowerVisuals()
+    local tFolder = Workspace:FindFirstChild("Towers")
+    if not tFolder then return end
+
+    for _, obj in ipairs(tFolder:GetChildren()) do
+        if obj:IsA("Model") and obj.Name ~= "TouchParts" and obj.Name ~= "TouchRadius" and obj.Name ~= "Roots" then
+            if not obj.PrimaryPart then
+                obj.PrimaryPart = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChildOfClass("BasePart")
+            end
+
+            -- 1. Tower Sizing
+            local targetScale = State.TowerSizing and State.TowerSizeValue or 1
+            setTowerScale(obj, targetScale)
+
+            -- 2. Tower Outlines
+            local h = obj:FindFirstChild("TowerOutline")
+            if State.TowerOutlines then
+                if not h then
+                    h = Instance.new("Highlight")
+                    h.Name = "TowerOutline"
+                    h.Parent = obj
+                end
+                h.FillTransparency = 1
+                h.OutlineColor = Color3.fromRGB(255, 170, 0)
+            else
+                if h then h:Destroy() end
+            end
+
+            -- 3. Tower Visual Effects
+            local f = obj.PrimaryPart and obj.PrimaryPart:FindFirstChild("TowerFire")
+            if State.TowerEffects and obj.PrimaryPart then
+                if not f then
+                    f = Instance.new("Fire")
+                    f.Name = "TowerFire"
+                    f.Size = 6
+                    f.Heat = 10
+                    f.Parent = obj.PrimaryPart
+                end
+            else
+                if f then f:Destroy() end
+            end
+        end
+    end
+end
+
+local function updateMonsterESP()
+    local mFolder = Workspace:FindFirstChild("Monsters")
+    if not mFolder then return end
+
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+
+    for _, m in ipairs(mFolder:GetChildren()) do
+        if m:IsA("Model") and m.Name ~= "TouchParts" then
+            local mRoot = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart or m:FindFirstChildOfClass("BasePart")
+            local bb = m:FindFirstChild("MonsterESP_BB")
+
+            if State.MonsterESP and mRoot then
+                if not bb then
+                    bb = Instance.new("BillboardGui")
+                    bb.Name = "MonsterESP_BB"
+                    bb.Size = UDim2.new(0, 140, 0, 36)
+                    bb.StudsOffset = Vector3.new(0, 3.5, 0)
+                    bb.AlwaysOnTop = true
+                    bb.Adornee = mRoot
+                    bb.Parent = m
+
+                    local nLbl = Instance.new("TextLabel")
+                    nLbl.Name = "NameLabel"
+                    nLbl.Size = UDim2.new(1, 0, 0, 18)
+                    nLbl.BackgroundTransparency = 1
+                    nLbl.TextColor3 = Color3.fromRGB(255, 80, 80)
+                    nLbl.Font = Enum.Font.GothamBlack
+                    nLbl.TextSize = 13
+                    nLbl.Text = m.Name
+                    nLbl.Parent = bb
+                    local s1 = Instance.new("UIStroke", nLbl)
+                    s1.Thickness = 1.5
+                    s1.Color = Color3.fromRGB(0, 0, 0)
+
+                    local dLbl = Instance.new("TextLabel")
+                    dLbl.Name = "DistLabel"
+                    dLbl.Size = UDim2.new(1, 0, 0, 16)
+                    dLbl.Position = UDim2.new(0, 0, 0, 18)
+                    dLbl.BackgroundTransparency = 1
+                    dLbl.TextColor3 = Color3.fromRGB(255, 235, 120)
+                    dLbl.Font = Enum.Font.GothamBold
+                    dLbl.TextSize = 11
+                    dLbl.Text = "0 studs"
+                    dLbl.Parent = bb
+                    local s2 = Instance.new("UIStroke", dLbl)
+                    s2.Thickness = 1.5
+                    s2.Color = Color3.fromRGB(0, 0, 0)
+                end
+
+                if root and bb:FindFirstChild("DistLabel") then
+                    local dist = (mRoot.Position - root.Position).Magnitude
+                    bb.DistLabel.Text = string.format("%d studs", math.floor(dist))
+                end
+            else
+                if bb then bb:Destroy() end
+            end
+        end
+    end
+end
+
+local function updatePlayerESP()
+    if not State.PlayerESP then return end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= lp and p.Character then
+            local head = p.Character:FindFirstChild("Head")
+            if head and not head:FindFirstChild("PlayerESP_BB") then
+                local bg = Instance.new("BillboardGui")
+                bg.Name = "PlayerESP_BB"
+                bg.Size = UDim2.new(0, 210, 0, 32)
+                bg.StudsOffset = Vector3.new(0, 2.8, 0)
+                bg.AlwaysOnTop = true
+                bg.Adornee = head
+                bg.Parent = head
+
+                local fr = Instance.new("Frame", bg)
+                fr.Size = UDim2.new(1, 0, 1, 0)
+                fr.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+                fr.BackgroundTransparency = 0.25
+                Instance.new("UICorner", fr).CornerRadius = UDim.new(0, 8)
+                local strk = Instance.new("UIStroke", fr)
+                strk.Color = Color3.fromRGB(255, 170, 0)
+                strk.Thickness = 1.2
+
+                local mImg = Instance.new("ImageLabel", fr)
+                mImg.Size = UDim2.new(0, 18, 0, 18)
+                mImg.Position = UDim2.new(0, 6, 0.5, -9)
+                mImg.BackgroundTransparency = 1
+                mImg.Image = ICON_MONEY
+
+                local mLbl = Instance.new("TextLabel", fr)
+                mLbl.Name = "MoneyVal"
+                mLbl.Size = UDim2.new(0, 42, 1, 0)
+                mLbl.Position = UDim2.new(0, 26, 0, 0)
+                mLbl.BackgroundTransparency = 1
+                mLbl.TextColor3 = Color3.fromRGB(255, 215, 0)
+                mLbl.Font = Enum.Font.GothamBold
+                mLbl.TextSize = 12
+                mLbl.Text = tostring(p:GetAttribute("Silver") or p:GetAttribute("Money") or 500)
+                mLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+                local uLbl = Instance.new("TextLabel", fr)
+                uLbl.Name = "UserVal"
+                uLbl.Size = UDim2.new(0, 75, 1, 0)
+                uLbl.Position = UDim2.new(0, 70, 0, 0)
+                uLbl.BackgroundTransparency = 1
+                uLbl.TextColor3 = Color3.fromRGB(255, 60, 60)
+                uLbl.Font = Enum.Font.GothamBold
+                uLbl.TextSize = 11
+                uLbl.Text = "@" .. p.Name
+                uLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+                local kImg = Instance.new("ImageLabel", fr)
+                kImg.Size = UDim2.new(0, 16, 0, 16)
+                kImg.Position = UDim2.new(1, -54, 0.5, -8)
+                kImg.BackgroundTransparency = 1
+                kImg.Image = ICON_KILLS
+
+                local kLbl = Instance.new("TextLabel", fr)
+                kLbl.Name = "KillVal"
+                kLbl.Size = UDim2.new(0, 36, 1, 0)
+                kLbl.Position = UDim2.new(1, -36, 0, 0)
+                kLbl.BackgroundTransparency = 1
+                kLbl.TextColor3 = Color3.fromRGB(255, 70, 70)
+                kLbl.Font = Enum.Font.GothamBold
+                kLbl.TextSize = 12
+                kLbl.Text = tostring(p:GetAttribute("Kills") or 0)
+                kLbl.TextXAlignment = Enum.TextXAlignment.Left
+            end
+        end
+    end
+end
+
 local function getDonor()
     for _, p in ipairs(Players:GetPlayers()) do
         if p.UserId == DONOR_ID or string.lower(p.Name) == string.lower(DONOR_NAME) then
@@ -233,440 +686,824 @@ end
 local function applySkin(m, sChar)
     if not m or not m:IsA("Model") then return end
     if Players:GetPlayerFromCharacter(m) then return end
-    if m.Name == "Roots" or m.Name == "TouchParts" or m.Name == "TouchRadius" then return end
-
     local root = m:FindFirstChild("HumanoidRootPart")
     local tHead = m:FindFirstChild("Head")
     if not root or not tHead then return end
 
-    if m:FindFirstChild("DonorAcc_Accessory (L Lawliet)") and tHead.Transparency >= 0.9 then
-        return
+    if not skinBackups[m] then
+        local b = { parts = {}, tHeadTrans = tHead.Transparency }
+        for _, p in ipairs(m:GetChildren()) do
+            if p:IsA("Accessory") or p:IsA("Shirt") or p:IsA("Pants") or p:IsA("ShirtGraphic") or p:IsA("CharacterMesh") then
+                b.parts[p] = p.Parent
+            end
+        end
+        skinBackups[m] = b
     end
+
+    for p in pairs(skinBackups[m].parts) do
+        if p.Parent == m then p.Parent = nil end
+    end
+
+    tHead.Transparency = 1
 
     local sHead = sChar:FindFirstChild("Head")
-    local shirt = sChar:FindFirstChildOfClass("Shirt")
-    local pants = sChar:FindFirstChildOfClass("Pants")
-    local shirtId = shirt and shirt.ShirtTemplate or "http://www.roblox.com/asset/?id=10382712726"
-    local pantsId = pants and pants.PantsTemplate or "http://www.roblox.com/asset/?id=13963923952"
-
-    for _, c in ipairs(m:GetChildren()) do
-        if c:IsA("Humanoid") or c.Name:find("Donor") or c.Name:find("Clone_") then
-            c:Destroy()
-        end
-    end
-
-    -- Натяжка рубашки и штанов
-    for _, p in ipairs(m:GetDescendants()) do
-        if p:IsA("MeshPart") and not p.Parent:IsA("Accessory") then
-            local n = string.lower(p.Name)
-            if n:find("torso") or n:find("arm") then
-                p.TextureID = shirtId
-            elseif n:find("leg") then
-                p.TextureID = pantsId
-            end
-        end
-    end
-
-    -- Headless
-    tHead.Transparency = 1
-    for _, item in ipairs(tHead:GetChildren()) do
-        local n = string.lower(item.Name)
-        if item:IsA("Decal") then
-            item:Destroy()
-        elseif n:find("hat") or n:find("hair") or n:find("helmet") or n:find("mask") or n:find("toxin") or n:find("handle") then
-            if item:IsA("BasePart") then item.Transparency = 1 end
-            for _, sub in ipairs(item:GetDescendants()) do
-                if sub:IsA("BasePart") or sub:IsA("Decal") then sub.Transparency = 1 end
-            end
-        end
-    end
-
-    -- Волосы L Lawliet (2 пары) и торт
     for _, acc in ipairs(sChar:GetChildren()) do
-        if acc:IsA("Accessory") and not acc.Name:find("baggyJeans") then
-            local sHandle = acc:FindFirstChild("Handle")
-            if sHandle then
-                local clone = sHandle:Clone()
-                clone.Name = "DonorAcc_" .. acc.Name
-                clone.CanCollide = false
-                clone.CanTouch = false
-                clone.CanQuery = false
-                clone.Massless = true
-                clone.Transparency = 0
+        if acc:IsA("Accessory") then
+            local handle = acc:FindFirstChild("Handle")
+            if handle and not m:FindFirstChild("Fake_" .. acc.Name) then
+                local c = handle:Clone()
+                c.Name = "Fake_" .. acc.Name
+                c.CanCollide = false
+                c.Anchored = false
+                c.Massless = true
+                c.Parent = m
 
-                for _, d in ipairs(clone:GetDescendants()) do
-                    if d:IsA("Constraint") or d:IsA("JointInstance") or d:IsA("WrapLayer") or d:IsA("WrapTarget") then
-                        d:Destroy()
-                    end
+                local attach = handle:FindFirstChildOfClass("Attachment")
+                local targetPart = tHead
+                local targetAttach = nil
+
+                if attach then
+                    local pName = attach.Name:gsub("Attachment", "")
+                    targetPart = m:FindFirstChild(pName) or tHead
+                    targetAttach = targetPart:FindFirstChild(attach.Name)
                 end
 
-                local att = clone:FindFirstChildOfClass("Attachment")
-                local targetAttCFrame = CFrame.new(0, 0.45, 0)
-                if att and sHead:FindFirstChild(att.Name) then
-                    targetAttCFrame = sHead:FindFirstChild(att.Name).CFrame
+                local weld = Instance.new("Weld")
+                weld.Part0 = targetPart
+                weld.Part1 = c
+                if attach and targetAttach then
+                    weld.C0 = targetAttach.CFrame
+                    weld.C1 = attach.CFrame
+                elseif sHead then
+                    weld.C0 = CFrame.new(0, 0.5, 0)
+                    weld.C1 = (sHead.CFrame:Inverse() * handle.CFrame)
                 end
-
-                if att then
-                    clone.CFrame = tHead.CFrame * targetAttCFrame * att.CFrame:Inverse()
-                else
-                    clone.CFrame = tHead.CFrame
-                end
-
-                clone.Parent = m
-                local weld = Instance.new("WeldConstraint")
-                weld.Part0 = clone
-                weld.Part1 = tHead
-                weld.Parent = clone
+                weld.Parent = c
             end
         end
     end
+
+    local shirt = m:FindFirstChildOfClass("Shirt") or Instance.new("Shirt", m)
+    shirt.ShirtTemplate = SHIRT_ID
+    local pants = m:FindFirstChildOfClass("Pants") or Instance.new("Pants", m)
+    pants.PantsTemplate = PANTS_ID
 end
 
--- // ------------------------------------------------------------
--- // 4. КАСТОМНЫЕ МОДЕЛИ MACHINEGUN (ПО МЕШ АЙДИ)
--- // ------------------------------------------------------------
-local function updateMachineGuns()
-    if not State.CustomMG then return end
-    local towers = Workspace:FindFirstChild("Towers")
-    if not towers then return end
+local function revertSkin(m)
+    local b = skinBackups[m]
+    if not b then return end
+    for _, ch in ipairs(m:GetChildren()) do
+        if ch.Name:find("Fake_") then ch:Destroy() end
+    end
+    local tHead = m:FindFirstChild("Head")
+    if tHead then tHead.Transparency = b.tHeadTrans end
+    for p, parent in pairs(b.parts) do
+        p.Parent = parent
+    end
+    skinBackups[m] = nil
+end
 
-    for _, t in ipairs(towers:GetChildren()) do
-        for mgName, meshId in pairs(MG_MESHES) do
-            if t.Name:find(mgName) and not t:FindFirstChild("CustomMGDone") then
-                local mark = Instance.new("BoolValue", t)
-                mark.Name = "CustomMGDone"
+RunService.RenderStepped:Connect(function()
+    if not State.RainbowRadius then return end
+    local color = Color3.fromHSV((tick() * 0.4) % 1, 0.9, 1)
 
-                local anchor = t:FindFirstChild("Gun", true) or t:FindFirstChild("Turel", true) or t:FindFirstChild("Up", true) or t:FindFirstChild("HumanoidRootPart")
-                if anchor then
-                    -- Прячем родные меши пушки
-                    for _, p in ipairs(t:GetDescendants()) do
-                        if p:IsA("MeshPart") and p.Name:find("Gun") then
-                            p.Transparency = 1
-                        end
-                    end
-
-                    -- Ставим кастомный меш
-                    local customP = Instance.new("Part")
-                    customP.Name = "CustomMGVisual"
-                    customP.CanCollide = false
-                    customP.Massless = true
-                    customP.CFrame = anchor.CFrame
-                    customP.Parent = t
-
-                    local sm = Instance.new("SpecialMesh", customP)
-                    sm.MeshType = Enum.MeshType.FileMesh
-                    sm.MeshId = "rbxassetid://" .. meshId
-                    sm.Scale = Vector3.new(1.2, 1.2, 1.2)
-
-                    local w = Instance.new("WeldConstraint")
-                    w.Part0 = customP
-                    w.Part1 = anchor
-                    w.Parent = customP
-                end
+    local tr = Workspace:FindFirstChild("Towers") and Workspace.Towers:FindFirstChild("TouchRadius")
+    if tr then
+        for _, rp in ipairs(tr:GetChildren()) do
+            if rp:IsA("MeshPart") or rp:IsA("BasePart") then
+                rp.Color = color
             end
         end
     end
-end
 
--- // ------------------------------------------------------------
--- // 5. TOWER HELPER & УЛУЧШЕНИЯ / ПРОДАЖА
--- // ------------------------------------------------------------
-local function getMoney()
-    local counter = pgui.MainGui.MoneyFrame:FindFirstChild("moneyCounter")
-    return counter and (tonumber(counter.Text:gsub("%D+", "")) or 0) or 0
-end
-
-local function getUpgradeCost()
-    local upg = pgui.MainGui.TowerFrame.FrameUpgrader.FrameStars.upgrade
-    local costLbl = upg and upg:FindFirstChild("cost")
-    return costLbl and (tonumber(costLbl.Text:gsub("%D+", "")) or 0) or 0
-end
-
-local function getSellPrice()
-    local sell = pgui.MainGui.TowerFrame:FindFirstChild("SellButton")
-    local priceLbl = sell and sell:FindFirstChild("price")
-    return priceLbl and (tonumber(priceLbl.Text:gsub("%D+", "")) or 0) or 0
-end
-
-local function doUpgrade()
-    local upgBtn = pgui.MainGui.TowerFrame.FrameUpgrader.FrameStars.upgrade
-    if upgBtn and getMoney() >= getUpgradeCost() then
-        for _, c in pairs(getconnections(upgBtn.MouseButton1Click)) do c:Fire() end
-        for _, c in pairs(getconnections(upgBtn.Activated)) do c:Fire() end
-        return true
+    local tp = Workspace:FindFirstChild("Towers") and Workspace.Towers:FindFirstChild("Part")
+    if tp and (tp:IsA("BasePart") or tp:IsA("MeshPart")) then
+        tp.Color = color
     end
-    return false
-end
+end)
 
-local function doSell()
-    local sellBtn = pgui.MainGui.TowerFrame:FindFirstChild("SellButton")
-    if sellBtn then
-        for _, c in pairs(getconnections(sellBtn.MouseButton1Click)) do c:Fire() end
-        for _, c in pairs(getconnections(sellBtn.Activated)) do c:Fire() end
-    end
-end
+local autoSkipGui = nil
+local lastSpawnTime = tick()
+local lastMonsterCount = 0
 
-local helperGui = Instance.new("ScreenGui")
-helperGui.Name = "VTD_HelperUI"
-helperGui.ResetOnSpawn = false
-helperGui.Parent = pgui
+local function createAutoSkipGUI()
+    if autoSkipGui then autoSkipGui:Destroy() end
 
-local activeBillboards = {}
+    autoSkipGui = Instance.new("ScreenGui")
+    autoSkipGui.Name = "AutoSkipStandalone"
+    autoSkipGui.ResetOnSpawn = false
+    autoSkipGui.Parent = CoreGui
 
-local function updateTowerHelper()
-    if not State.TowerHelper then
-        for _, b in pairs(activeBillboards) do b:Destroy() end
-        activeBillboards = {}
-        return
-    end
+    local frame = Instance.new("Frame", autoSkipGui)
+    frame.Name = "DragContainer"
+    frame.Size = UDim2.new(0, 160, 0, 52)
+    frame.Position = UDim2.new(0, 12, 0.5, -26)
+    frame.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
+    frame.BackgroundTransparency = 0.2
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+    local strk = Instance.new("UIStroke", frame)
+    strk.Color = Color3.fromRGB(50, 50, 60)
 
-    local char = lp.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
+    local compLbl = Instance.new("TextLabel", frame)
+    compLbl.Name = "CompleteLabel"
+    compLbl.Size = UDim2.new(1, -12, 0, 18)
+    compLbl.Position = UDim2.new(0, 6, 0, 4)
+    compLbl.BackgroundTransparency = 1
+    compLbl.Font = Enum.Font.GothamBlack
+    compLbl.TextSize = 13
+    compLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    compLbl.Text = "0% Complete"
+    compLbl.TextXAlignment = Enum.TextXAlignment.Center
 
-    local towers = Workspace:FindFirstChild("Towers")
-    if not towers then return end
+    local titleLbl = Instance.new("TextLabel", frame)
+    titleLbl.Name = "Title"
+    titleLbl.Size = UDim2.new(0, 100, 0, 24)
+    titleLbl.Position = UDim2.new(0, 6, 0, 24)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Font = Enum.Font.GothamBlack
+    titleLbl.TextSize = 15
+    titleLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    titleLbl.Text = "Auto Skip"
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-    for _, t in ipairs(towers:GetChildren()) do
-        if t:IsA("Model") and t:FindFirstChild("HumanoidRootPart") then
-            local dist = (t.HumanoidRootPart.Position - root.Position).Magnitude
-            local bb = activeBillboards[t]
+    local boxBtn = Instance.new("TextButton", frame)
+    boxBtn.Name = "ToggleBox"
+    boxBtn.Size = UDim2.new(0, 22, 0, 22)
+    boxBtn.Position = UDim2.new(1, -30, 0, 25)
+    boxBtn.BackgroundColor3 = State.AutoSkip and Color3.fromRGB(0, 220, 50) or Color3.fromRGB(220, 0, 0)
+    boxBtn.Text = ""
+    Instance.new("UICorner", boxBtn).CornerRadius = UDim.new(0, 4)
+    local bStrk = Instance.new("UIStroke", boxBtn)
+    bStrk.Thickness = 1.5
+    bStrk.Color = Color3.fromRGB(0, 0, 0)
 
-            if dist <= 10 then
-                if not bb then
-                    bb = Instance.new("BillboardGui")
-                    bb.Name = "TH_Billboard"
-                    bb.Size = UDim2.new(0, 170, 0, 42)
-                    bb.StudsOffset = Vector3.new(0, 7.5, 0) -- Высоко над башней!
-                    bb.AlwaysOnTop = true
-                    bb.Active = true
-                    bb.Adornee = t.HumanoidRootPart
-                    bb.Parent = helperGui
-
-                    local bUpg = Instance.new("TextButton")
-                    bUpg.Size = UDim2.new(0, 80, 1, 0)
-                    bUpg.Position = UDim2.new(0, 0, 0, 0)
-                    bUpg.BackgroundColor3 = Color3.fromRGB(30, 165, 65)
-                    bUpg.TextColor3 = Color3.fromRGB(255, 255, 255)
-                    bUpg.Font = Enum.Font.GothamBold
-                    bUpg.TextSize = 11
-                    bUpg.Text = "UPGRADE"
-                    bUpg.Active = true
-                    bUpg.Parent = bb
-                    Instance.new("UICorner", bUpg).CornerRadius = UDim.new(0, 6)
-
-                    local bSell = Instance.new("TextButton")
-                    bSell.Size = UDim2.new(0, 80, 1, 0)
-                    bSell.Position = UDim2.new(0, 90, 0, 0)
-                    bSell.BackgroundColor3 = Color3.fromRGB(205, 40, 40)
-                    bSell.TextColor3 = Color3.fromRGB(255, 255, 255)
-                    bSell.Font = Enum.Font.GothamBold
-                    bSell.TextSize = 11
-                    bSell.Text = "SELL"
-                    bSell.Active = true
-                    bSell.Parent = bb
-                    Instance.new("UICorner", bSell).CornerRadius = UDim.new(0, 6)
-
-                    bUpg.Activated:Connect(function()
-                        doUpgrade()
-                    end)
-
-                    bSell.Activated:Connect(function()
-                        doSell()
-                    end)
-
-                    activeBillboards[t] = bb
-                end
-            else
-                if bb then
-                    bb:Destroy()
-                    activeBillboards[t] = nil
-                end
-            end
-        end
-    end
-end
-
--- // ------------------------------------------------------------
--- // 6. PLAYER OVERHEAD STATS (ESP ДЕНЕГ И КИЛЛОВ)
--- // ------------------------------------------------------------
-local function updatePlayerESP()
-    if not State.PlayerESP then return end
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= lp and p.Character then
-            local head = p.Character:FindFirstChild("Head")
-            if head and not head:FindFirstChild("PlayerESP_BB") then
-                local bg = Instance.new("BillboardGui")
-                bg.Name = "PlayerESP_BB"
-                bg.Size = UDim2.new(0, 140, 0, 32)
-                bg.StudsOffset = Vector3.new(0, 2.8, 0)
-                bg.AlwaysOnTop = true
-                bg.Adornee = head
-                bg.Parent = head
-
-                local f = Instance.new("Frame")
-                f.Size = UDim2.new(1, 0, 1, 0)
-                f.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
-                f.BackgroundTransparency = 0.25
-                f.Parent = bg
-                Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
-
-                -- Money
-                local mImg = Instance.new("ImageLabel")
-                mImg.Size = UDim2.new(0, 18, 0, 18)
-                mImg.Position = UDim2.new(0, 6, 0.5, -9)
-                mImg.BackgroundTransparency = 1
-                mImg.Image = ICON_MONEY
-                mImg.Parent = f
-
-                local mLbl = Instance.new("TextLabel")
-                mLbl.Size = UDim2.new(0, 42, 1, 0)
-                mLbl.Position = UDim2.new(0, 28, 0, 0)
-                mLbl.BackgroundTransparency = 1
-                mLbl.TextColor3 = Color3.fromRGB(255, 215, 0)
-                mLbl.Font = Enum.Font.GothamBold
-                mLbl.TextSize = 12
-                mLbl.Text = "0"
-                mLbl.TextXAlignment = Enum.TextXAlignment.Left
-                mLbl.Parent = f
-
-                -- Kills
-                local kImg = Instance.new("ImageLabel")
-                kImg.Size = UDim2.new(0, 16, 0, 16)
-                kImg.Position = UDim2.new(0, 78, 0.5, -8)
-                kImg.BackgroundTransparency = 1
-                kImg.Image = ICON_KILLS
-                kImg.Parent = f
-
-                local kLbl = Instance.new("TextLabel")
-                kLbl.Size = UDim2.new(0, 42, 1, 0)
-                kLbl.Position = UDim2.new(0, 98, 0, 0)
-                kLbl.BackgroundTransparency = 1
-                kLbl.TextColor3 = Color3.fromRGB(255, 75, 75)
-                kLbl.Font = Enum.Font.GothamBold
-                kLbl.TextSize = 12
-                kLbl.Text = "0"
-                kLbl.TextXAlignment = Enum.TextXAlignment.Left
-                kLbl.Parent = f
-
-                local ls = p:FindFirstChild("leaderstats")
-                if ls then
-                    local mVal = ls:FindFirstChild("Money")
-                    local kVal = ls:FindFirstChild("Kills")
-                    if mVal then
-                        mLbl.Text = tostring(mVal.Value)
-                        mVal.Changed:Connect(function(v) mLbl.Text = tostring(v) end)
-                    end
-                    if kVal then
-                        kLbl.Text = tostring(kVal.Value)
-                        kVal.Changed:Connect(function(v) kLbl.Text = tostring(v) end)
-                    end
-                end
-            end
-        end
-    end
-end
-
--- // ------------------------------------------------------------
--- // 7. ГЛАВНОЕ МЕНЮ (ПОДДЕРЖКА IPHONE / DELTA IOS ДРАГ)
--- // ------------------------------------------------------------
-local hubGui = Instance.new("ScreenGui")
-hubGui.Name = "VTD_HubUI"
-hubGui.ResetOnSpawn = false
-hubGui.Parent = uiParent
-
-local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 205, 0, 260)
-mainFrame.Position = UDim2.new(0.04, 0, 0.3, 0)
-mainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
-mainFrame.BorderSizePixel = 0
-mainFrame.Active = true
-mainFrame.Parent = hubGui
-Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
-
-local stroke = Instance.new("UIStroke", mainFrame)
-stroke.Color = Color3.fromRGB(60, 60, 75)
-stroke.Thickness = 1.5
-
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 32)
-title.BackgroundTransparency = 1
-title.Font = Enum.Font.GothamBlack
-title.TextSize = 13
-title.TextColor3 = Color3.fromRGB(255, 255, 255)
-title.Text = "VANTA TD HUB"
-title.Parent = mainFrame
-
-local content = Instance.new("Frame")
-content.Size = UDim2.new(1, -20, 1, -40)
-content.Position = UDim2.new(0, 10, 0, 34)
-content.BackgroundTransparency = 1
-content.Parent = mainFrame
-
-local layout = Instance.new("UIListLayout", content)
-layout.Padding = UDim.new(0, 5)
-
-local function makeBtn(name, key)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(1, 0, 0, 28)
-    b.BackgroundColor3 = State[key] and Color3.fromRGB(35, 160, 70) or Color3.fromRGB(45, 45, 50)
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 11
-    b.TextColor3 = Color3.fromRGB(255, 255, 255)
-    b.Text = name .. (State[key] and " [ВКЛ]" or " [ВЫКЛ]")
-    b.Parent = content
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
-
-    b.Activated:Connect(function()
-        State[key] = not State[key]
-        b.BackgroundColor3 = State[key] and Color3.fromRGB(35, 160, 70) or Color3.fromRGB(45, 45, 50)
-        b.Text = name .. (State[key] and " [ВКЛ]" or " [ВЫКЛ]")
+    boxBtn.MouseButton1Click:Connect(function()
+        State.AutoSkip = not State.AutoSkip
+        boxBtn.BackgroundColor3 = State.AutoSkip and Color3.fromRGB(0, 220, 50) or Color3.fromRGB(220, 0, 0)
     end)
 end
 
-makeBtn("Скинченджер", "Skinchanger")
-makeBtn("Радужный радиус", "RainbowRadius")
-makeBtn("Tower Helper", "TowerHelper")
-makeBtn("Player ESP", "PlayerESP")
-makeBtn("Кастом MachineGun", "CustomMG")
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        local mFolder = Workspace:FindFirstChild("Monsters")
+        local count = 0
+        if mFolder then
+            for _, m in ipairs(mFolder:GetChildren()) do
+                if m.Name ~= "TouchParts" then count = count + 1 end
+            end
+        end
 
-local upgBtn = Instance.new("TextButton")
-upgBtn.Size = UDim2.new(1, 0, 0, 28)
-upgBtn.BackgroundColor3 = Color3.fromRGB(35, 105, 215)
-upgBtn.Font = Enum.Font.GothamBold
-upgBtn.TextSize = 11
-upgBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-upgBtn.Text = "⚡ АПНУТЬ БАШНЮ"
-upgBtn.Parent = content
-Instance.new("UICorner", upgBtn).CornerRadius = UDim.new(0, 6)
-upgBtn.Activated:Connect(doUpgrade)
+        if count > lastMonsterCount then
+            lastSpawnTime = tick()
+        end
+        lastMonsterCount = count
 
--- Сенсорный драг для пальцев на iPhone (Delta iOS)
-local dragging = false
-local dragStart, startPos
+        local text = "0% Complete"
+        if count == 0 then
+            text = "100% Complete"
+        elseif (tick() - lastSpawnTime) > 3 then
+            text = string.format("%d монстров осталось", count)
+        else
+            text = string.format("%d монстров (спавн...)", count)
+        end
 
-mainFrame.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = mainFrame.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+        if autoSkipGui then
+            local lbl = autoSkipGui:FindFirstChild("DragContainer") and autoSkipGui.DragContainer:FindFirstChild("CompleteLabel")
+            if lbl then lbl.Text = text end
+        end
+
+        if State.AutoSkip then
+            local mainGui = pgui:FindFirstChild("MainGui")
+            local startBtn = mainGui
+                and mainGui:FindFirstChild("LevelFrame")
+                and mainGui.LevelFrame:FindFirstChild("NextWaveInfo")
+                and mainGui.LevelFrame.NextWaveInfo:FindFirstChild("StartFrame")
+                and mainGui.LevelFrame.NextWaveInfo.StartFrame:FindFirstChild("Start")
+            if startBtn and startBtn.Visible then
+                fireClick(startBtn)
+            end
+        end
+    end
+end)
+
+RunService.RenderStepped:Connect(function(dt)
+    local char = lp.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+
+    if hum and root then
+        if State.SpeedEnabled then
+            hum.WalkSpeed = 16
+            if hum.MoveDirection.Magnitude > 0 then
+                root.CFrame = root.CFrame + (hum.MoveDirection * (State.TargetSpeed - 16) * dt)
+            end
+        end
+        if State.JumpEnabled then
+            hum.JumpPower = State.TargetJump
+        end
+    end
+end)
+
+RunService.Stepped:Connect(function()
+    local char = lp.Character
+    if char and State.NoclipEnabled then
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                part.CanCollide = false
+            end
+        end
+    end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    local char = lp.Character
+    if char and State.InfJumpEnabled then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end
+end)
+
+-- Jerk Off
+task.spawn(function()
+    while true do
+        task.wait()
+        pcall(function()
+            local char = lp.Character
+            if State.JerkOffEnabled and char then
+                local rs = char:FindFirstChild("RightHand") and char.RightUpperArm:FindFirstChild("RightShoulder")
+                if rs then
+                    for i = 1, 5 do
+                        if not State.JerkOffEnabled then break end
+                        rs.C0 = rs.C0 * CFrame.Angles(math.rad(10), 0, 0)
+                        task.wait(0.02)
+                    end
+                    for i = 1, 5 do
+                        if not State.JerkOffEnabled then break end
+                        rs.C0 = rs.C0 * CFrame.Angles(math.rad(-10), 0, 0)
+                        task.wait(0.02)
+                    end
+                end
+            end
         end)
     end
 end)
 
-mainFrame.InputChanged:Connect(function(input)
-    if (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) and dragging then
-        local delta = input.Position - dragStart
-        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+-- Emotions
+local AnimationIds = {
+    Wave = "rbxassetid://507770239",
+    Dance = "rbxassetid://507771019",
+    Laugh = "rbxassetid://507770818",
+    Cheer = "rbxassetid://507770677",
+    Point = "rbxassetid://507770453"
+}
+local currentEmotionTrack = nil
+
+local function setEmotion(name, active, speed)
+    local char = lp.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local anim = hum and hum:FindFirstChildOfClass("Animator")
+
+    if active and anim then
+        if currentEmotionTrack then currentEmotionTrack:Stop() end
+        local a = Instance.new("Animation")
+        a.AnimationId = AnimationIds[name] or AnimationIds.Wave
+        currentEmotionTrack = anim:LoadAnimation(a)
+        currentEmotionTrack.Looped = true
+        currentEmotionTrack:Play()
+        currentEmotionTrack:AdjustSpeed(speed or 1)
+    else
+        if currentEmotionTrack then
+            currentEmotionTrack:Stop()
+            currentEmotionTrack = nil
+        end
+    end
+end
+
+-- Body Fling Target
+task.spawn(function()
+    local rot = 0
+    while true do
+        task.wait()
+        if State.FlingEnabled and State.SelectedTargetName ~= "" then
+            pcall(function()
+                local target = Players:FindFirstChild(State.SelectedTargetName)
+                local tChar = target and target.Character
+                local tHrp = tChar and tChar:FindFirstChild("HumanoidRootPart")
+
+                local myChar = lp.Character
+                local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
+                if tHrp and myHrp then
+                    if State.SelectedFlingMode == "Faster Fling" then
+                        rot = rot + 350
+                        myHrp.CFrame = tHrp.CFrame * CFrame.Angles(0, math.rad(rot), 0)
+                        myHrp.Velocity = Vector3.new(999999, 999999, 999999)
+                    elseif State.SelectedFlingMode == "Slowed fling" then
+                        rot = rot + 40
+                        myHrp.CFrame = tHrp.CFrame * CFrame.Angles(0, math.rad(rot), 0)
+                        myHrp.Velocity = Vector3.new(40000, 45000, 40000)
+                    else
+                        rot = rot + 90
+                        myHrp.CFrame = tHrp.CFrame * CFrame.Angles(0, math.rad(rot), 0)
+                        myHrp.Velocity = Vector3.new(120000, 120000, 120000)
+                    end
+                end
+            end)
+        end
     end
 end)
 
--- Фоновый процесс скинченджера и обновлений
+-- Loop TP to player
 task.spawn(function()
     while true do
-        task.wait(0.25)
+        task.wait()
+        if State.LoopTpEnabled and State.SelectedPlayerName ~= "" then
+            local target = Players:FindFirstChild(State.SelectedPlayerName)
+            if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") and lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") then
+                lp.Character.HumanoidRootPart.CFrame = target.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
+            end
+        end
+    end
+end)
+
+local Window = Library:CreateWindow({
+    Title = "TSUM [BETA] 2.1 | Omni-Suite",
+    Footer = "Tsum | MTD Clan Suite by Slend & Tol1kz_dev",
+    Icon = "terminal",
+    NotifySide = "Right",
+    ShowCustomCursor = false,
+    EnableCompacting = true,
+    SidebarCompacted = false,
+    CornerRadius = 12
+})
+
+local Tabs = {
+    Main     = Window:AddTab("Home", "home"),
+    Player   = Window:AddTab("Player", "user"),
+    Target   = Window:AddTab("Target", "crosshair"),
+    Towers   = Window:AddTab("Towers", "shield"),
+    Visuals  = Window:AddTab("Visuals", "eye"),
+    Dron     = Window:AddTab("Dron", "bot"),
+    Settings = Window:AddTab("Settings", "settings")
+}
+
+Library.AccentColor = Color3.fromRGB(255, 170, 0)
+Library.MainColor = Color3.fromRGB(255, 255, 255)
+Library.BackgroundColor = Color3.fromRGB(20, 20, 24)
+
+local HomeLeft = Tabs.Main:AddLeftGroupbox("Auto Skip & Waves", "zap")
+local HomeRight = Tabs.Main:AddRightGroupbox("Mass Tower Automation", "coins")
+
+HomeLeft:AddCheckbox("AutoSkipToggle", {
+    Text = "Auto Skip",
+    Default = State.AutoSkip,
+    Icon = "terminal",
+    Callback = function(v) State.AutoSkip = v end
+})
+
+HomeLeft:AddButton({
+    Text = "Show/Unshow AutoSkip GUI",
+    Func = function()
+        if autoSkipGui and autoSkipGui.Enabled then
+            autoSkipGui.Enabled = false
+        elseif autoSkipGui then
+            autoSkipGui.Enabled = true
+        else
+            createAutoSkipGUI()
+        end
+    end
+})
+
+local TotalMoneyLabel = HomeRight:AddLabel("Balance: $0", true)
+local TotalUpgradeLabel = HomeRight:AddLabel("Upgrade All Towers: $0", true)
+local TotalSellLabel = HomeRight:AddLabel("Sell All Towers: +$0", true)
+
+HomeRight:AddCheckbox("AutoUpgradeAllToggle", {
+    Text = "Auto Upgrade All Towers",
+    Default = State.AutoUpgradeAll,
+    Icon = "terminal",
+    Callback = function(v) State.AutoUpgradeAll = v end
+})
+
+HomeRight:AddButton({
+    Text = "Upgrade All Towers",
+    Func = function()
+        task.spawn(upgradeAllTowers)
+    end
+})
+
+HomeRight:AddButton({
+    Text = "Sell All Towers",
+    Func = function()
+        task.spawn(sellAllTowers)
+    end
+})
+
+task.spawn(function()
+    while true do
+        task.wait(0.8)
+        pcall(function()
+            local upgCost, sellReturn, count, upgCount = getTowersFinancials()
+            local money = getMoney()
+            TotalMoneyLabel:SetText(string.format("Balance: $%s", money))
+            TotalUpgradeLabel:SetText(string.format("Upgrade All (%d): $%d", upgCount, upgCost))
+            TotalSellLabel:SetText(string.format("Sell All (%d): +$%d", count, sellReturn))
+        end)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if State.AutoUpgradeAll then
+            local money = getMoney()
+            local tFolder = Workspace:FindFirstChild("Towers")
+            if tFolder and money > 0 then
+                for _, t in ipairs(tFolder:GetChildren()) do
+                    if not State.AutoUpgradeAll then break end
+                    if t:IsA("Model") and t.Name ~= "TouchParts" and t.Name ~= "TouchRadius" and t.Name ~= "Roots" then
+                        doUpgrade(t)
+                        task.wait(0.08)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+local PlayerLeft = Tabs.Player:AddLeftGroupbox("Character", "zap")
+local PlayerRight = Tabs.Player:AddRightGroupbox("Players & Animations", "user")
+
+PlayerLeft:AddCheckbox("WalkspeedToggle", {
+    Text = "Walkspeed",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v) State.SpeedEnabled = v end
+})
+
+PlayerLeft:AddSlider("SpeedSlider", {
+    Text = "Walkspeed Tune",
+    Min = 5,
+    Max = 1000,
+    Default = 16,
+    Rounding = 0,
+    Callback = function(v) State.TargetSpeed = v end
+})
+
+PlayerLeft:AddCheckbox("JumpPowerToggle", {
+    Text = "Jump Power",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v) State.JumpEnabled = v end
+})
+
+PlayerLeft:AddSlider("JumpSlider", {
+    Text = "Jump Power Tune",
+    Min = 1,
+    Max = 500,
+    Default = 50,
+    Rounding = 0,
+    Callback = function(v) State.TargetJump = v end
+})
+
+PlayerLeft:AddCheckbox("ToggleNoclip", {
+    Text = "Noclip",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v) State.NoclipEnabled = v end
+})
+
+PlayerLeft:AddCheckbox("ToggleInfJump", {
+    Text = "Inf Jump",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v) State.InfJumpEnabled = v end
+})
+
+PlayerLeft:AddCheckbox("ToggleJerk", {
+    Text = "Jerk Off",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v) State.JerkOffEnabled = v end
+})
+
+local PlayerDropdown = PlayerRight:AddDropdown("PlayerDropdown", {
+    Text = "Select Player Server",
+    Values = {},
+    Default = "",
+    Callback = function(v) State.SelectedPlayerName = v end
+})
+
+local TargetDropdown = nil
+
+local function RefreshPlayers()
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= lp then table.insert(list, p.Name) end
+    end
+    PlayerDropdown:SetValues(list)
+    if TargetDropdown then TargetDropdown:SetValues(list) end
+end
+Players.PlayerAdded:Connect(RefreshPlayers)
+Players.PlayerRemoving:Connect(RefreshPlayers)
+task.spawn(RefreshPlayers)
+
+PlayerRight:AddCheckbox("SpectateToggle", {
+    Text = "Spectate Player",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v)
+        State.SpectateEnabled = v
+        local cam = Workspace.CurrentCamera
+        if v and State.SelectedPlayerName ~= "" then
+            local t = Players:FindFirstChild(State.SelectedPlayerName)
+            local hum = t and t.Character and t.Character:FindFirstChildOfClass("Humanoid")
+            if hum then cam.CameraSubject = hum end
+        else
+            local myHum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+            if myHum then cam.CameraSubject = myHum end
+        end
+    end
+})
+
+PlayerRight:AddCheckbox("LoopTpToggle", {
+    Text = "Loop TP to Player",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v) State.LoopTpEnabled = v end
+})
+
+PlayerRight:AddDropdown("EmotionDropdown", {
+    Text = "Select Emotion",
+    Values = { "Wave", "Dance", "Laugh", "Cheer", "Point" },
+    Default = "Wave",
+    Callback = function(v) State.SelectedEmotion = v end
+})
+
+PlayerRight:AddSlider("EmotionSpeedSlider", {
+    Text = "Emotion Speed",
+    Min = 1,
+    Max = 5,
+    Default = 1,
+    Rounding = 1,
+    Callback = function(v)
+        State.EmotionSpeed = v
+        if currentEmotionTrack and State.EmotionPlaying then
+            currentEmotionTrack:AdjustSpeed(v)
+        end
+    end
+})
+
+PlayerRight:AddCheckbox("PlayEmotionToggle", {
+    Text = "Play Emotion",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v)
+        State.EmotionPlaying = v
+        setEmotion(State.SelectedEmotion, v, State.EmotionSpeed)
+    end
+})
+
+-- ==================== Вкладка Target ====================
+local TargetLeft = Tabs.Target:AddLeftGroupbox("Drone Exploits", "crosshair")
+local TargetRight = Tabs.Target:AddRightGroupbox("Target Fling", "user")
+
+TargetLeft:AddCheckbox("BreakClickDroneToggle", {
+    Text = "Apply break click drone",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v) State.BreakClickDrone = v end
+})
+
+TargetLeft:AddCheckbox("BreakPlayerInfDayToggle", {
+    Text = "break player? (inf day)",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v) State.BreakPlayerInfDay = v end
+})
+
+TargetDropdown = TargetRight:AddDropdown("TargetDropdown", {
+    Text = "Select Target Player",
+    Values = {},
+    Default = "",
+    Callback = function(v) State.SelectedTargetName = v end
+})
+
+TargetRight:AddDropdown("FlingModeDropdown", {
+    Text = "Select Fling Mode",
+    Values = { "Faster Fling", "Slowed fling", "Default" },
+    Default = "Default",
+    Callback = function(v) State.SelectedFlingMode = v end
+})
+
+TargetRight:AddCheckbox("FlingTargetToggle", {
+    Text = "Body Fling Target",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v) State.FlingEnabled = v end
+})
+
+-- ==================== Вкладка Towers ====================
+local TowersLeft = Tabs.Towers:AddLeftGroupbox("Proximity Actions", "crosshair")
+local TowersRight = Tabs.Towers:AddRightGroupbox("Modifiers", "sliders")
+
+local function getClosestTower(maxDist)
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+
+    local towers = Workspace:FindFirstChild("Towers")
+    if not towers then return nil end
+
+    local closest, minDist = nil, maxDist or 15
+    for _, t in ipairs(towers:GetChildren()) do
+        if t:IsA("Model") and t.Name ~= "TouchParts" and t.Name ~= "TouchRadius" and t.Name ~= "Roots" then
+            local part = t:FindFirstChild("HumanoidRootPart") or t:FindFirstChildOfClass("BasePart")
+            if part then
+                local dist = (part.Position - root.Position).Magnitude
+                if dist < minDist then
+                    minDist = dist
+                    closest = t
+                end
+            end
+        end
+    end
+    return closest
+end
+
+TowersLeft:AddButton({
+    Text = "Upgrade Closest Tower (15 studs)",
+    Func = function()
+        task.spawn(function()
+            local t = getClosestTower(15)
+            if t then doUpgrade(t) end
+        end)
+    end
+})
+
+TowersLeft:AddButton({
+    Text = "Sell Closest Tower (15 studs)",
+    Func = function()
+        task.spawn(function()
+            local t = getClosestTower(15)
+            if t then doSell(t) end
+        end)
+    end
+})
+
+TowersRight:AddCheckbox("TowerSizingToggle", {
+    Text = "Apply Tower Sizing",
+    Default = State.TowerSizing,
+    Icon = "terminal",
+    Callback = function(v)
+        State.TowerSizing = v
+        updateTowerVisuals()
+    end
+})
+
+TowersRight:AddSlider("TowerSizeSlider", {
+    Text = "Esp Towers Size",
+    Default = State.TowerSizeValue,
+    Min = 1,
+    Max = 7,
+    Rounding = 0,
+    Callback = function(v)
+        State.TowerSizeValue = v
+        updateTowerVisuals()
+    end
+})
+
+TowersRight:AddCheckbox("TowerOutlinesToggle", {
+    Text = "Tower Outlines",
+    Default = State.TowerOutlines,
+    Icon = "terminal",
+    Callback = function(v)
+        State.TowerOutlines = v
+        updateTowerVisuals()
+    end
+})
+
+TowersRight:AddCheckbox("TowerEffectsToggle", {
+    Text = "Tower Visual Effects (Fire)",
+    Default = State.TowerEffects,
+    Icon = "terminal",
+    Callback = function(v)
+        State.TowerEffects = v
+        updateTowerVisuals()
+    end
+})
+
+-- ==================== Вкладка Visuals ====================
+local VisualsLeft = Tabs.Visuals:AddLeftGroupbox("ESP Modules", "eye")
+local VisualsRight = Tabs.Visuals:AddRightGroupbox("Custom Turret & Skins", "palette")
+
+VisualsLeft:AddCheckbox("MonsterESPToggle", {
+    Text = "Monster ESP (Name & Distance)",
+    Default = State.MonsterESP,
+    Icon = "terminal",
+    Callback = function(v) State.MonsterESP = v end
+})
+
+VisualsLeft:AddCheckbox("PlayerESPToggle", {
+    Text = "Player ESP (Money, @Name, Kills)",
+    Default = State.PlayerESP,
+    Icon = "terminal",
+    Callback = function(v) State.PlayerESP = v end
+})
+
+VisualsRight:AddCheckbox("SkinchangerToggle", {
+    Text = "Skin Changer (SlendxNT Test Morph)",
+    Default = false,
+    Icon = "terminal",
+    Callback = function(v)
+        State.Skinchanger = v
+        if not v then
+            local tFolder = Workspace:FindFirstChild("Towers")
+            if tFolder then for _, t in ipairs(tFolder:GetChildren()) do revertSkin(t) end end
+            local mFolder = Workspace:FindFirstChild("Monsters")
+            if mFolder then for _, m in ipairs(mFolder:GetChildren()) do revertSkin(m) end end
+        end
+    end
+})
+
+VisualsRight:AddCheckbox("RainbowRadiusToggle", {
+    Text = "Rainbow Radius",
+    Default = State.RainbowRadius,
+    Icon = "terminal",
+    Callback = function(v) State.RainbowRadius = v end
+})
+
+VisualsRight:AddCheckbox("CustomMGToggle", {
+    Text = "Custom MachineGun Model (TF2 Sentry)",
+    Default = State.CustomMG,
+    Icon = "terminal",
+    Callback = function(v)
+        State.CustomMG = v
+        updateMachineGuns()
+    end
+})
+
+VisualsRight:AddSlider("SentryHeightSlider", {
+    Text = "Height Offset",
+    Default = State.SentryHeight,
+    Min = 0.0,
+    Max = 10.0,
+    Rounding = 1,
+    Callback = function(v)
+        State.SentryHeight = v
+    end
+})
+
+VisualsRight:AddSlider("SentryRotSlider", {
+    Text = "Rotation",
+    Default = State.SentryRotation,
+    Min = 0,
+    Max = 360,
+    Rounding = 0,
+    Callback = function(v)
+        State.SentryRotation = v
+    end
+})
+
+-- ==================== Вкладка Dron ====================
+local DronLeft = Tabs.Dron:AddLeftGroupbox("Drone Owner", "bot")
+local DronRight = Tabs.Dron:AddRightGroupbox("Drone Destroyer", "flame")
+
+DronLeft:AddButton({
+    Text = "Claim / Spawn your drone",
+    Func = function()
+        task.spawn(claimDrone)
+    end
+})
+
+DronLeft:AddCheckbox("AntiDroneToggle", {
+    Text = "Anti-Drone (Automate take back if stolen",
+    Default = State.AntiDrone,
+    Icon = "terminal",
+    Callback = function(v) State.AntiDrone = v end
+})
+
+DronRight:AddButton({
+    Text = "🔥 Destroy empty drone (1 sec)",
+    Func = function()
+        task.spawn(autoDestroyOtherDrones)
+    end
+})
+
+-- Настройки темы
+local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+ThemeManager:SetLibrary(Library)
+ThemeManager:ApplyToTab(Tabs.Settings)
+
+-- Фоновый процесс
+task.spawn(function()
+    createAutoSkipGUI()
+    while true do
+        task.wait(0.3)
         if State.Skinchanger then
             local sChar = getDonor()
             if sChar then
@@ -676,10 +1513,11 @@ task.spawn(function()
                 if mFolder then for _, m in ipairs(mFolder:GetChildren()) do applySkin(m, sChar) end end
             end
         end
-        pcall(updateTowerHelper)
         pcall(updatePlayerESP)
+        pcall(updateMonsterESP)
         pcall(updateMachineGuns)
+        pcall(updateTowerVisuals)
     end
 end)
 
-print("[VANTA TD] Скрипт полностью перезапущен и готов!")
+print("[TSUM & MTD] UI succefully Loaded!")
