@@ -1,17 +1,226 @@
--- // Настройки
-local DONOR_NAME = "slendxnt"
-local DONOR_ID = 2816661114
-local TOGGLE_KEY = Enum.KeyCode.K
+-- // ============================================================
+-- //   VANTA TOWER DEFENSE ULTIMATE SCRIPT (PC & DELTA IOS)
+-- // ============================================================
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
-local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 local CoreGui = game:GetService("CoreGui")
 
-local isSkinActive = false
-local backupStates = {}
+local lp = Players.LocalPlayer
+local pgui = lp:WaitForChild("PlayerGui")
 
--- Безопасный поиск игрока SlendxNT
+local gethui = rawget(getgenv and getgenv() or _G, "gethui")
+local uiParent = (gethui and gethui()) or CoreGui:FindFirstChild("RobloxGui") or pgui
+
+-- Очистка старых GUI
+for _, name in ipairs({"VTD_AutoSkipUI", "VTD_HelperUI", "VTD_HubUI", "VTD_ESP"}) do
+    local old = uiParent:FindFirstChild(name)
+    if old then old:Destroy() end
+    local pOld = pgui:FindFirstChild(name)
+    if pOld then pOld:Destroy() end
+end
+
+-- Настройки донора для скинченджера
+local DONOR_NAME = "slendxnt"
+local DONOR_ID = 2816661114
+
+-- Кастомные меши для MachineGun
+local MG_MESHES = {
+    MachineGun0 = "11143209459", -- Lvl 1
+    MachineGun1 = "296191732",   -- Lvl 2
+    MachineGun2 = "8607274660"   -- Lvl 3
+}
+
+-- Иконки
+local ICON_MONEY = "rbxassetid://11174899832"
+local ICON_KILLS = "rbxassetid://5726383129"
+
+local State = {
+    AutoSkip = false,
+    Skinchanger = true,
+    RainbowRadius = true,
+    TowerHelper = true,
+    PlayerESP = true,
+    CustomMG = true
+}
+
+-- // ------------------------------------------------------------
+-- // 1. AUTO SKIP & НОВАЯ ЛОГИКА 0% COMPLETE
+-- // ------------------------------------------------------------
+-- Логика: если 3 секунды новые монстры не появляются, значит волна
+-- доспавнилась и идут последние. Если монстров 0 -> пишет 100% Complete.
+
+local skipGui = Instance.new("ScreenGui")
+skipGui.Name = "VTD_AutoSkipUI"
+skipGui.ResetOnSpawn = false
+skipGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+skipGui.Parent = uiParent
+
+local skipFrame = Instance.new("Frame")
+skipFrame.Size = UDim2.new(0, 160, 0, 52)
+skipFrame.Position = UDim2.new(0.5, -80, 0, 12)
+skipFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+skipFrame.BackgroundTransparency = 0.25
+skipFrame.Active = true
+skipFrame.Parent = skipGui
+Instance.new("UICorner", skipFrame).CornerRadius = UDim.new(0, 8)
+
+local pLabel = Instance.new("TextLabel")
+pLabel.Size = UDim2.new(1, 0, 0, 22)
+pLabel.Position = UDim2.new(0, 0, 0, 3)
+pLabel.BackgroundTransparency = 1
+pLabel.Font = Enum.Font.GothamBlack
+pLabel.TextSize = 15
+pLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+pLabel.Text = "0% Complete"
+pLabel.Parent = skipFrame
+local s1 = Instance.new("UIStroke", pLabel)
+s1.Thickness = 2
+s1.Color = Color3.fromRGB(0, 0, 0)
+
+local skipRow = Instance.new("TextButton")
+skipRow.Size = UDim2.new(1, -16, 0, 24)
+skipRow.Position = UDim2.new(0, 8, 0, 24)
+skipRow.BackgroundTransparency = 1
+skipRow.Text = ""
+skipRow.Parent = skipFrame
+
+local skipText = Instance.new("TextLabel")
+skipText.Size = UDim2.new(0, 90, 1, 0)
+skipText.Position = UDim2.new(0, 8, 0, 0)
+skipText.BackgroundTransparency = 1
+skipText.Font = Enum.Font.GothamBold
+skipText.TextSize = 14
+skipText.TextColor3 = Color3.fromRGB(255, 255, 255)
+skipText.Text = "Auto Skip"
+skipText.TextXAlignment = Enum.TextXAlignment.Left
+skipText.Parent = skipRow
+local s2 = Instance.new("UIStroke", skipText)
+s2.Thickness = 1.5
+s2.Color = Color3.fromRGB(0, 0, 0)
+
+local skipBox = Instance.new("Frame")
+skipBox.Size = UDim2.new(0, 18, 0, 18)
+skipBox.Position = UDim2.new(1, -22, 0.5, -9)
+skipBox.BackgroundColor3 = Color3.fromRGB(220, 30, 30)
+skipBox.BorderSizePixel = 0
+skipBox.Parent = skipRow
+Instance.new("UICorner", skipBox).CornerRadius = UDim.new(0, 4)
+
+local function toggleSkip()
+    State.AutoSkip = not State.AutoSkip
+    skipBox.BackgroundColor3 = State.AutoSkip and Color3.fromRGB(30, 205, 70) or Color3.fromRGB(220, 30, 30)
+end
+
+skipRow.Activated:Connect(toggleSkip)
+
+-- Отслеживание прогресса волны
+local maxMonstersSeen = 0
+local lastMonsterSpawnTick = tick()
+local previousMonsterCount = 0
+
+task.spawn(function()
+    while true do
+        task.wait(0.12)
+        local mFolder = Workspace:FindFirstChild("Monsters")
+        local currentMonsters = 0
+        if mFolder then
+            for _, m in ipairs(mFolder:GetChildren()) do
+                if m:IsA("Model") and m.Name ~= "TouchParts" then
+                    currentMonsters = currentMonsters + 1
+                end
+            end
+        end
+
+        -- Новые монстры появились
+        if currentMonsters > previousMonsterCount then
+            lastMonsterSpawnTick = tick()
+            if currentMonsters > maxMonstersSeen then
+                maxMonstersSeen = currentMonsters
+            end
+        end
+        previousMonsterCount = currentMonsters
+
+        -- Логика отображения
+        if currentMonsters == 0 then
+            pLabel.Text = "100% Complete"
+            maxMonstersSeen = 0
+        else
+            -- Если 3 секунды никто не спавнился — значит остались последние
+            if (tick() - lastMonsterSpawnTick) >= 3 and maxMonstersSeen > 0 then
+                local pct = math.clamp(math.floor(((maxMonstersSeen - currentMonsters) / maxMonstersSeen) * 100), 0, 99)
+                pLabel.Text = tostring(pct) .. "% Complete"
+            else
+                pLabel.Text = "0% Complete"
+            end
+        end
+
+        -- Автонажатие кнопки старта
+        if State.AutoSkip then
+            pcall(function()
+                local mainGui = pgui:FindFirstChild("MainGui")
+                local startBtn = mainGui.LevelFrame.NextWaveInfo.StartFrame.Start
+                if startBtn and (startBtn.Visible or startBtn.Parent.Visible) then
+                    local firesig = rawget(getgenv and getgenv() or _G, "firesignal")
+                    if firesig then
+                        firesig(startBtn.MouseButton1Click)
+                        firesig(startBtn.Activated)
+                    else
+                        for _, c in pairs(getconnections(startBtn.MouseButton1Click)) do c:Fire() end
+                        for _, c in pairs(getconnections(startBtn.Activated)) do c:Fire() end
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+-- // ------------------------------------------------------------
+-- // 2. РАДУЖНЫЙ РАДИУС (ПОСТОЯННЫЙ + workspace.Towers.Part)
+-- // ------------------------------------------------------------
+-- Работает всегда, пока открыта башня или выбирается точка установки.
+-- Если точка запрещена (красный цвет 255, 51, 51) — радуга тормозится на красном.
+
+RunService.RenderStepped:Connect(function()
+    if not State.RainbowRadius then return end
+    local rainbow = Color3.fromHSV((tick() * 0.7) % 1, 1, 1)
+
+    -- 1. Радиус выбранной башни (workspace.Towers.Part)
+    local tFolder = Workspace:FindFirstChild("Towers")
+    if tFolder then
+        local tPart = tFolder:FindFirstChild("Part")
+        if tPart and tPart:IsA("BasePart") then
+            tPart.Color = rainbow
+        end
+        local touchRad = tFolder:FindFirstChild("TouchRadius")
+        if touchRad then
+            for _, rPart in ipairs(touchRad:GetChildren()) do
+                if rPart:IsA("BasePart") then rPart.Color = rainbow end
+            end
+        end
+    end
+
+    -- 2. Радиус при установке башни в пространстве
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj:IsA("Model") and obj ~= lp.Character and obj.Name ~= "Towers" and obj.Name ~= "Monsters" then
+            local rPart = obj:FindFirstChild("Part") or obj:FindFirstChild("TouchPart") or obj:FindFirstChild("RadiusPart")
+            if rPart and rPart:IsA("BasePart") then
+                local r, g, b = rPart.Color.R * 255, rPart.Color.G * 255, rPart.Color.B * 255
+                -- Проверка на красный цвет запрета установки (Persimmon)
+                if r > 190 and g < 100 and b < 100 then
+                    -- Оставляем красный
+                else
+                    rPart.Color = rainbow
+                end
+            end
+        end
+    end
+end)
+
+-- // ------------------------------------------------------------
+-- // 3. СКИНЧЕНДЖЕР (РАБОЧИЙ МЕТОД СО СЛЕНДОМ)
+-- // ------------------------------------------------------------
 local function getDonor()
     for _, p in ipairs(Players:GetPlayers()) do
         if p.UserId == DONOR_ID or string.lower(p.Name) == string.lower(DONOR_NAME) then
@@ -21,46 +230,35 @@ local function getDonor()
     return nil
 end
 
--- // Функция переодевания одной модели
 local function applySkin(m, sChar)
     if not m or not m:IsA("Model") then return end
     if Players:GetPlayerFromCharacter(m) then return end
     if m.Name == "Roots" or m.Name == "TouchParts" or m.Name == "TouchRadius" then return end
-    
+
     local root = m:FindFirstChild("HumanoidRootPart")
     local tHead = m:FindFirstChild("Head")
     if not root or not tHead then return end
-    
-    -- Если модель уже заскинена и хедлесс активен — пропускаем
+
     if m:FindFirstChild("DonorAcc_Accessory (L Lawliet)") and tHead.Transparency >= 0.9 then
         return
     end
-    
-    local state = backupStates[m] or {
-        parts = {},
-        addedAccessories = {}
-    }
-    
+
     local sHead = sChar:FindFirstChild("Head")
     local shirt = sChar:FindFirstChildOfClass("Shirt")
     local pants = sChar:FindFirstChildOfClass("Pants")
     local shirtId = shirt and shirt.ShirtTemplate or "http://www.roblox.com/asset/?id=10382712726"
     local pantsId = pants and pants.PantsTemplate or "http://www.roblox.com/asset/?id=13963923952"
-    
-    -- Очищаем мусорные остатки
+
     for _, c in ipairs(m:GetChildren()) do
         if c:IsA("Humanoid") or c.Name:find("Donor") or c.Name:find("Clone_") then
             c:Destroy()
         end
     end
-    
-    -- Одежда (рубашка и джинсы)
+
+    -- Натяжка рубашки и штанов
     for _, p in ipairs(m:GetDescendants()) do
         if p:IsA("MeshPart") and not p.Parent:IsA("Accessory") then
             local n = string.lower(p.Name)
-            if not state.parts[p] then
-                state.parts[p] = {TextureID = p.TextureID}
-            end
             if n:find("torso") or n:find("arm") then
                 p.TextureID = shirtId
             elseif n:find("leg") then
@@ -68,32 +266,21 @@ local function applySkin(m, sChar)
             end
         end
     end
-    
+
     -- Headless
-    if not state.parts[tHead] then
-        state.parts[tHead] = {Transparency = tHead.Transparency}
-    end
     tHead.Transparency = 1
-    
-    -- Скрываем родные шлемы, шапки и лица товера
     for _, item in ipairs(tHead:GetChildren()) do
         local n = string.lower(item.Name)
         if item:IsA("Decal") then
             item:Destroy()
         elseif n:find("hat") or n:find("hair") or n:find("helmet") or n:find("mask") or n:find("toxin") or n:find("handle") then
-            if item:IsA("BasePart") then
-                if not state.parts[item] then state.parts[item] = {Transparency = item.Transparency} end
-                item.Transparency = 1
-            end
+            if item:IsA("BasePart") then item.Transparency = 1 end
             for _, sub in ipairs(item:GetDescendants()) do
-                if sub:IsA("BasePart") or sub:IsA("Decal") then
-                    if not state.parts[sub] then state.parts[sub] = {Transparency = sub.Transparency} end
-                    sub.Transparency = 1
-                end
+                if sub:IsA("BasePart") or sub:IsA("Decal") then sub.Transparency = 1 end
             end
         end
     end
-    
+
     -- Волосы L Lawliet (2 пары) и торт
     for _, acc in ipairs(sChar:GetChildren()) do
         if acc:IsA("Accessory") and not acc.Name:find("baggyJeans") then
@@ -106,192 +293,393 @@ local function applySkin(m, sChar)
                 clone.CanQuery = false
                 clone.Massless = true
                 clone.Transparency = 0
-                
+
                 for _, d in ipairs(clone:GetDescendants()) do
                     if d:IsA("Constraint") or d:IsA("JointInstance") or d:IsA("WrapLayer") or d:IsA("WrapTarget") then
                         d:Destroy()
                     end
                 end
-                
+
                 local att = clone:FindFirstChildOfClass("Attachment")
                 local targetAttCFrame = CFrame.new(0, 0.45, 0)
                 if att and sHead:FindFirstChild(att.Name) then
                     targetAttCFrame = sHead:FindFirstChild(att.Name).CFrame
                 end
-                
+
                 if att then
                     clone.CFrame = tHead.CFrame * targetAttCFrame * att.CFrame:Inverse()
                 else
                     clone.CFrame = tHead.CFrame
                 end
-                
+
                 clone.Parent = m
                 local weld = Instance.new("WeldConstraint")
                 weld.Part0 = clone
                 weld.Part1 = tHead
                 weld.Parent = clone
-                
-                table.insert(state.addedAccessories, clone)
             end
         end
     end
-    
-    backupStates[m] = state
 end
 
--- // Откат (Revert)
-local function revertSkin(m)
-    local state = backupStates[m]
-    if not state then return end
-    
-    for _, acc in ipairs(state.addedAccessories) do
-        if acc and acc.Parent then acc:Destroy() end
-    end
-    
-    for obj, props in pairs(state.parts) do
-        if obj and obj.Parent then
-            if props.TextureID ~= nil then obj.TextureID = props.TextureID end
-            if props.Transparency ~= nil then obj.Transparency = props.Transparency end
+-- // ------------------------------------------------------------
+-- // 4. КАСТОМНЫЕ МОДЕЛИ MACHINEGUN (ПО МЕШ АЙДИ)
+-- // ------------------------------------------------------------
+local function updateMachineGuns()
+    if not State.CustomMG then return end
+    local towers = Workspace:FindFirstChild("Towers")
+    if not towers then return end
+
+    for _, t in ipairs(towers:GetChildren()) do
+        for mgName, meshId in pairs(MG_MESHES) do
+            if t.Name:find(mgName) and not t:FindFirstChild("CustomMGDone") then
+                local mark = Instance.new("BoolValue", t)
+                mark.Name = "CustomMGDone"
+
+                local anchor = t:FindFirstChild("Gun", true) or t:FindFirstChild("Turel", true) or t:FindFirstChild("Up", true) or t:FindFirstChild("HumanoidRootPart")
+                if anchor then
+                    -- Прячем родные меши пушки
+                    for _, p in ipairs(t:GetDescendants()) do
+                        if p:IsA("MeshPart") and p.Name:find("Gun") then
+                            p.Transparency = 1
+                        end
+                    end
+
+                    -- Ставим кастомный меш
+                    local customP = Instance.new("Part")
+                    customP.Name = "CustomMGVisual"
+                    customP.CanCollide = false
+                    customP.Massless = true
+                    customP.CFrame = anchor.CFrame
+                    customP.Parent = t
+
+                    local sm = Instance.new("SpecialMesh", customP)
+                    sm.MeshType = Enum.MeshType.FileMesh
+                    sm.MeshId = "rbxassetid://" .. meshId
+                    sm.Scale = Vector3.new(1.2, 1.2, 1.2)
+
+                    local w = Instance.new("WeldConstraint")
+                    w.Part0 = customP
+                    w.Part1 = anchor
+                    w.Parent = customP
+                end
+            end
         end
     end
-    
-    backupStates[m] = nil
 end
 
--- // Функция проверки всех товеров и монстров
-local function scanAll()
-    if not isSkinActive then return end
-    local sChar = getDonor()
-    if not sChar then return end
-    
-    local tFolder = Workspace:FindFirstChild("Towers")
-    if tFolder then
-        for _, t in ipairs(tFolder:GetChildren()) do applySkin(t, sChar) end
+-- // ------------------------------------------------------------
+-- // 5. TOWER HELPER & УЛУЧШЕНИЯ / ПРОДАЖА
+-- // ------------------------------------------------------------
+local function getMoney()
+    local counter = pgui.MainGui.MoneyFrame:FindFirstChild("moneyCounter")
+    return counter and (tonumber(counter.Text:gsub("%D+", "")) or 0) or 0
+end
+
+local function getUpgradeCost()
+    local upg = pgui.MainGui.TowerFrame.FrameUpgrader.FrameStars.upgrade
+    local costLbl = upg and upg:FindFirstChild("cost")
+    return costLbl and (tonumber(costLbl.Text:gsub("%D+", "")) or 0) or 0
+end
+
+local function getSellPrice()
+    local sell = pgui.MainGui.TowerFrame:FindFirstChild("SellButton")
+    local priceLbl = sell and sell:FindFirstChild("price")
+    return priceLbl and (tonumber(priceLbl.Text:gsub("%D+", "")) or 0) or 0
+end
+
+local function doUpgrade()
+    local upgBtn = pgui.MainGui.TowerFrame.FrameUpgrader.FrameStars.upgrade
+    if upgBtn and getMoney() >= getUpgradeCost() then
+        for _, c in pairs(getconnections(upgBtn.MouseButton1Click)) do c:Fire() end
+        for _, c in pairs(getconnections(upgBtn.Activated)) do c:Fire() end
+        return true
     end
-    
-    local mFolder = Workspace:FindFirstChild("Monsters")
-    if mFolder then
-        for _, m in ipairs(mFolder:GetChildren()) do applySkin(m, sChar) end
+    return false
+end
+
+local function doSell()
+    local sellBtn = pgui.MainGui.TowerFrame:FindFirstChild("SellButton")
+    if sellBtn then
+        for _, c in pairs(getconnections(sellBtn.MouseButton1Click)) do c:Fire() end
+        for _, c in pairs(getconnections(sellBtn.Activated)) do c:Fire() end
     end
 end
 
--- // Фоновый цикл отслеживания улучшений и спавна (каждые 0.3 сек)
-task.spawn(function()
-    while true do
-        task.wait(0.3)
-        if isSkinActive then
-            pcall(scanAll)
+local helperGui = Instance.new("ScreenGui")
+helperGui.Name = "VTD_HelperUI"
+helperGui.ResetOnSpawn = false
+helperGui.Parent = pgui
+
+local activeBillboards = {}
+
+local function updateTowerHelper()
+    if not State.TowerHelper then
+        for _, b in pairs(activeBillboards) do b:Destroy() end
+        activeBillboards = {}
+        return
+    end
+
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local towers = Workspace:FindFirstChild("Towers")
+    if not towers then return end
+
+    for _, t in ipairs(towers:GetChildren()) do
+        if t:IsA("Model") and t:FindFirstChild("HumanoidRootPart") then
+            local dist = (t.HumanoidRootPart.Position - root.Position).Magnitude
+            local bb = activeBillboards[t]
+
+            if dist <= 10 then
+                if not bb then
+                    bb = Instance.new("BillboardGui")
+                    bb.Name = "TH_Billboard"
+                    bb.Size = UDim2.new(0, 170, 0, 42)
+                    bb.StudsOffset = Vector3.new(0, 7.5, 0) -- Высоко над башней!
+                    bb.AlwaysOnTop = true
+                    bb.Active = true
+                    bb.Adornee = t.HumanoidRootPart
+                    bb.Parent = helperGui
+
+                    local bUpg = Instance.new("TextButton")
+                    bUpg.Size = UDim2.new(0, 80, 1, 0)
+                    bUpg.Position = UDim2.new(0, 0, 0, 0)
+                    bUpg.BackgroundColor3 = Color3.fromRGB(30, 165, 65)
+                    bUpg.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    bUpg.Font = Enum.Font.GothamBold
+                    bUpg.TextSize = 11
+                    bUpg.Text = "UPGRADE"
+                    bUpg.Active = true
+                    bUpg.Parent = bb
+                    Instance.new("UICorner", bUpg).CornerRadius = UDim.new(0, 6)
+
+                    local bSell = Instance.new("TextButton")
+                    bSell.Size = UDim2.new(0, 80, 1, 0)
+                    bSell.Position = UDim2.new(0, 90, 0, 0)
+                    bSell.BackgroundColor3 = Color3.fromRGB(205, 40, 40)
+                    bSell.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    bSell.Font = Enum.Font.GothamBold
+                    bSell.TextSize = 11
+                    bSell.Text = "SELL"
+                    bSell.Active = true
+                    bSell.Parent = bb
+                    Instance.new("UICorner", bSell).CornerRadius = UDim.new(0, 6)
+
+                    bUpg.Activated:Connect(function()
+                        doUpgrade()
+                    end)
+
+                    bSell.Activated:Connect(function()
+                        doSell()
+                    end)
+
+                    activeBillboards[t] = bb
+                end
+            else
+                if bb then
+                    bb:Destroy()
+                    activeBillboards[t] = nil
+                end
+            end
         end
     end
-end)
-
--- // Переключатель
-local function toggleSkin(active)
-    isSkinActive = active
-    if isSkinActive then
-        local sChar = getDonor()
-        if not sChar then
-            warn("[Skin Swapper] SlendxNT не найден!")
-            return false
-        end
-        scanAll()
-    else
-        for m in pairs(backupStates) do revertSkin(m) end
-    end
-    return true
 end
 
--- // UI ДЛЯ ПК И DELTA IOS (АЙФОН)
-local gethui = rawget(getgenv and getgenv() or _G, "gethui")
-local uiParent = (gethui and gethui()) or CoreGui:FindFirstChild("RobloxGui") or Players.LocalPlayer:WaitForChild("PlayerGui")
+-- // ------------------------------------------------------------
+-- // 6. PLAYER OVERHEAD STATS (ESP ДЕНЕГ И КИЛЛОВ)
+-- // ------------------------------------------------------------
+local function updatePlayerESP()
+    if not State.PlayerESP then return end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= lp and p.Character then
+            local head = p.Character:FindFirstChild("Head")
+            if head and not head:FindFirstChild("PlayerESP_BB") then
+                local bg = Instance.new("BillboardGui")
+                bg.Name = "PlayerESP_BB"
+                bg.Size = UDim2.new(0, 140, 0, 32)
+                bg.StudsOffset = Vector3.new(0, 2.8, 0)
+                bg.AlwaysOnTop = true
+                bg.Adornee = head
+                bg.Parent = head
 
-local oldUi = uiParent:FindFirstChild("DeltaSkinUI")
-if oldUi then oldUi:Destroy() end
+                local f = Instance.new("Frame")
+                f.Size = UDim2.new(1, 0, 1, 0)
+                f.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+                f.BackgroundTransparency = 0.25
+                f.Parent = bg
+                Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
 
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "DeltaSkinUI"
-screenGui.ResetOnSpawn = false
-screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-screenGui.Parent = uiParent
+                -- Money
+                local mImg = Instance.new("ImageLabel")
+                mImg.Size = UDim2.new(0, 18, 0, 18)
+                mImg.Position = UDim2.new(0, 6, 0.5, -9)
+                mImg.BackgroundTransparency = 1
+                mImg.Image = ICON_MONEY
+                mImg.Parent = f
 
-local btn = Instance.new("TextButton")
-btn.Name = "SkinToggleButton"
-btn.Size = UDim2.new(0, 140, 0, 42)
-btn.Position = UDim2.new(1, -155, 0, 110)
-btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-btn.TextSize = 13
-btn.Font = Enum.Font.GothamBold
-btn.Text = "SKIN: [ ВЫКЛ ]"
-btn.Active = true
-btn.AutoButtonColor = true
-btn.Parent = screenGui
+                local mLbl = Instance.new("TextLabel")
+                mLbl.Size = UDim2.new(0, 42, 1, 0)
+                mLbl.Position = UDim2.new(0, 28, 0, 0)
+                mLbl.BackgroundTransparency = 1
+                mLbl.TextColor3 = Color3.fromRGB(255, 215, 0)
+                mLbl.Font = Enum.Font.GothamBold
+                mLbl.TextSize = 12
+                mLbl.Text = "0"
+                mLbl.TextXAlignment = Enum.TextXAlignment.Left
+                mLbl.Parent = f
 
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 10)
-corner.Parent = btn
+                -- Kills
+                local kImg = Instance.new("ImageLabel")
+                kImg.Size = UDim2.new(0, 16, 0, 16)
+                kImg.Position = UDim2.new(0, 78, 0.5, -8)
+                kImg.BackgroundTransparency = 1
+                kImg.Image = ICON_KILLS
+                kImg.Parent = f
 
-local stroke = Instance.new("UIStroke")
+                local kLbl = Instance.new("TextLabel")
+                kLbl.Size = UDim2.new(0, 42, 1, 0)
+                kLbl.Position = UDim2.new(0, 98, 0, 0)
+                kLbl.BackgroundTransparency = 1
+                kLbl.TextColor3 = Color3.fromRGB(255, 75, 75)
+                kLbl.Font = Enum.Font.GothamBold
+                kLbl.TextSize = 12
+                kLbl.Text = "0"
+                kLbl.TextXAlignment = Enum.TextXAlignment.Left
+                kLbl.Parent = f
+
+                local ls = p:FindFirstChild("leaderstats")
+                if ls then
+                    local mVal = ls:FindFirstChild("Money")
+                    local kVal = ls:FindFirstChild("Kills")
+                    if mVal then
+                        mLbl.Text = tostring(mVal.Value)
+                        mVal.Changed:Connect(function(v) mLbl.Text = tostring(v) end)
+                    end
+                    if kVal then
+                        kLbl.Text = tostring(kVal.Value)
+                        kVal.Changed:Connect(function(v) kLbl.Text = tostring(v) end)
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- // ------------------------------------------------------------
+-- // 7. ГЛАВНОЕ МЕНЮ (ПОДДЕРЖКА IPHONE / DELTA IOS ДРАГ)
+-- // ------------------------------------------------------------
+local hubGui = Instance.new("ScreenGui")
+hubGui.Name = "VTD_HubUI"
+hubGui.ResetOnSpawn = false
+hubGui.Parent = uiParent
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 205, 0, 260)
+mainFrame.Position = UDim2.new(0.04, 0, 0.3, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Parent = hubGui
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
+
+local stroke = Instance.new("UIStroke", mainFrame)
+stroke.Color = Color3.fromRGB(60, 60, 75)
 stroke.Thickness = 1.5
-stroke.Color = Color3.fromRGB(80, 80, 80)
-stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-stroke.Parent = btn
 
--- // Сенсорный драг для пальцев на iPhone (TouchDrag)
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 32)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBlack
+title.TextSize = 13
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Text = "VANTA TD HUB"
+title.Parent = mainFrame
+
+local content = Instance.new("Frame")
+content.Size = UDim2.new(1, -20, 1, -40)
+content.Position = UDim2.new(0, 10, 0, 34)
+content.BackgroundTransparency = 1
+content.Parent = mainFrame
+
+local layout = Instance.new("UIListLayout", content)
+layout.Padding = UDim.new(0, 5)
+
+local function makeBtn(name, key)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, 0, 0, 28)
+    b.BackgroundColor3 = State[key] and Color3.fromRGB(35, 160, 70) or Color3.fromRGB(45, 45, 50)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 11
+    b.TextColor3 = Color3.fromRGB(255, 255, 255)
+    b.Text = name .. (State[key] and " [ВКЛ]" or " [ВЫКЛ]")
+    b.Parent = content
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+
+    b.Activated:Connect(function()
+        State[key] = not State[key]
+        b.BackgroundColor3 = State[key] and Color3.fromRGB(35, 160, 70) or Color3.fromRGB(45, 45, 50)
+        b.Text = name .. (State[key] and " [ВКЛ]" or " [ВЫКЛ]")
+    end)
+end
+
+makeBtn("Скинченджер", "Skinchanger")
+makeBtn("Радужный радиус", "RainbowRadius")
+makeBtn("Tower Helper", "TowerHelper")
+makeBtn("Player ESP", "PlayerESP")
+makeBtn("Кастом MachineGun", "CustomMG")
+
+local upgBtn = Instance.new("TextButton")
+upgBtn.Size = UDim2.new(1, 0, 0, 28)
+upgBtn.BackgroundColor3 = Color3.fromRGB(35, 105, 215)
+upgBtn.Font = Enum.Font.GothamBold
+upgBtn.TextSize = 11
+upgBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+upgBtn.Text = "⚡ АПНУТЬ БАШНЮ"
+upgBtn.Parent = content
+Instance.new("UICorner", upgBtn).CornerRadius = UDim.new(0, 6)
+upgBtn.Activated:Connect(doUpgrade)
+
+-- Сенсорный драг для пальцев на iPhone (Delta iOS)
 local dragging = false
 local dragStart, startPos
 
-btn.InputBegan:Connect(function(input)
+mainFrame.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         dragStart = input.Position
-        startPos = btn.Position
-        
+        startPos = mainFrame.Position
         input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
         end)
     end
 end)
 
-btn.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-        if dragging then
-            local delta = input.Position - dragStart
-            btn.Position = UDim2.new(
-                startPos.X.Scale,
-                startPos.X.Offset + delta.X,
-                startPos.Y.Scale,
-                startPos.Y.Offset + delta.Y
-            )
+mainFrame.InputChanged:Connect(function(input)
+    if (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) and dragging then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+-- Фоновый процесс скинченджера и обновлений
+task.spawn(function()
+    while true do
+        task.wait(0.25)
+        if State.Skinchanger then
+            local sChar = getDonor()
+            if sChar then
+                local tFolder = Workspace:FindFirstChild("Towers")
+                if tFolder then for _, t in ipairs(tFolder:GetChildren()) do applySkin(t, sChar) end end
+                local mFolder = Workspace:FindFirstChild("Monsters")
+                if mFolder then for _, m in ipairs(mFolder:GetChildren()) do applySkin(m, sChar) end end
+            end
         end
+        pcall(updateTowerHelper)
+        pcall(updatePlayerESP)
+        pcall(updateMachineGuns)
     end
 end)
 
-local function updateBtnVisual()
-    if isSkinActive then
-        btn.Text = "SKIN: [ ВКЛ ]"
-        btn.BackgroundColor3 = Color3.fromRGB(30, 180, 75)
-        stroke.Color = Color3.fromRGB(60, 230, 110)
-    else
-        btn.Text = "SKIN: [ ВЫКЛ ]"
-        btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-        stroke.Color = Color3.fromRGB(80, 80, 80)
-    end
-end
-
-local function onToggle()
-    if toggleSkin(not isSkinActive) then
-        updateBtnVisual()
-    end
-end
-
-btn.Activated:Connect(onToggle)
-UserInputService.InputBegan:Connect(function(input, processed)
-    if not processed and input.KeyCode == TOGGLE_KEY then
-        onToggle()
-    end
-end)
-
-print("[Skin Swapper] Загружено! Поддерживает ПК и Delta iOS (iPhone).")
+print("[VANTA TD] Скрипт полностью перезапущен и готов!")
