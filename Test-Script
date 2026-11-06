@@ -9,6 +9,7 @@ local CoreGui = game:GetService("CoreGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local Lighting = game:GetService("Lighting")
+local HttpService = game:GetService("HttpService")
 
 local lp = Players.LocalPlayer
 local pgui = lp:WaitForChild("PlayerGui")
@@ -17,6 +18,11 @@ local Mouse = lp:GetMouse()
 local State = {
     AutoSkip = true,
     AutoUpgradeAll = false,
+    MacroRecording = false,
+    MacroPlaying = false,
+    MacroAutoLoop = true,
+    MacroRecordSkips = true,
+    MacroFile = "mtd_macro.json",
     RainbowRadius = true,
     TowerHelper = true,
     PlayerESP = true,
@@ -86,6 +92,9 @@ end
 local skinBackups = {}
 local OrgDestroyHeight = Workspace.FallenPartsDestroyHeight
 
+-- // ==============================================================================
+-- //   ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+-- // ==============================================================================
 local function fireClick(btn)
     if not btn then return end
     if btn:IsA("Frame") then
@@ -252,6 +261,296 @@ local function sellAllTowers()
     end
 end
 
+-- // ==============================================================================
+-- //   AUTO PLAY MACRO ENGINE (ЗАПИСЬ И ВОСПРОИЗВЕДЕНИЕ)
+-- // ==============================================================================
+local MacroActions = {}
+local TrackedTowers = {}
+local PlaybackTowerMap = {}
+local currentActionIndex = 1
+local nextMacroIdCounter = 1
+local StatusPlaybackText = "Выключен"
+
+local function getCurrentWave()
+    local mainGui = pgui:FindFirstChild("MainGui")
+    local waveLbl = mainGui
+        and mainGui:FindFirstChild("LevelFrame")
+        and mainGui.LevelFrame:FindFirstChild("stats")
+        and mainGui.LevelFrame.stats:FindFirstChild("Wave")
+        and mainGui.LevelFrame.stats.Wave:FindFirstChild("Counter")
+    if waveLbl and waveLbl.Text then
+        local w = tonumber(waveLbl.Text:match("(%d+)/")) or tonumber(waveLbl.Text:match("(%d+)"))
+        if w then return w end
+    end
+    return 1
+end
+
+local function getTowerBuildCost(towerName)
+    local data = towerStatsCache[towerName]
+    if data and data.price then return data.price end
+    return 100
+end
+
+local function triggerSkip()
+    local mainGui = pgui:FindFirstChild("MainGui")
+    local startBtn = mainGui
+        and mainGui:FindFirstChild("LevelFrame")
+        and mainGui.LevelFrame:FindFirstChild("NextWaveInfo")
+        and mainGui.LevelFrame.NextWaveInfo:FindFirstChild("StartFrame")
+        and mainGui.LevelFrame.NextWaveInfo.StartFrame:FindFirstChild("Start")
+    if startBtn and startBtn.Visible then fireClick(startBtn) end
+end
+
+local function findTowerNear(x, z, maxDist)
+    if not SharedClass then return nil end
+    local tpFolder = Workspace:FindFirstChild("Towers") and Workspace.Towers:FindFirstChild("TouchParts")
+    if not tpFolder then return nil end
+    local bestObj = nil
+    local minDist = maxDist or 6
+
+    for _, tp in ipairs(tpFolder:GetChildren()) do
+        local uid = tp:GetAttribute("uid")
+        if uid then
+            local obj = SharedClass.GetById(uid)
+            if obj and obj.isOwner and obj.position then
+                local dist = math.sqrt((obj.position.X - x)^2 + (obj.position.Z - z)^2)
+                if dist < minDist then
+                    minDist = dist
+                    bestObj = obj
+                end
+            end
+        end
+    end
+    return bestObj
+end
+
+local function startRecording()
+    MacroActions = {}
+    TrackedTowers = {}
+    nextMacroIdCounter = 1
+    State.MacroRecording = true
+    State.MacroPlaying = false
+
+    local tpFolder = Workspace:FindFirstChild("Towers") and Workspace.Towers:FindFirstChild("TouchParts")
+    if tpFolder and SharedClass then
+        for _, tp in ipairs(tpFolder:GetChildren()) do
+            local uid = tp:GetAttribute("uid")
+            if uid then
+                local obj = SharedClass.GetById(uid)
+                if obj and obj.isOwner and obj.position then
+                    local id = nextMacroIdCounter
+                    nextMacroIdCounter = nextMacroIdCounter + 1
+                    TrackedTowers[uid] = {
+                        macroId = id,
+                        name = obj.name,
+                        x = obj.position.X,
+                        z = obj.position.Z,
+                        star = obj.starCount or 0
+                    }
+                    table.insert(MacroActions, {
+                        type = "BUILD",
+                        macroId = id,
+                        name = obj.name,
+                        x = obj.position.X,
+                        z = obj.position.Z,
+                        wave = getCurrentWave()
+                    })
+                end
+            end
+        end
+    end
+end
+
+local function stopRecording()
+    State.MacroRecording = false
+end
+
+local function startPlayback()
+    if #MacroActions == 0 then
+        StatusPlaybackText = "⚠️ Макрос пуст! Сначала запишите или загрузите."
+        return
+    end
+    PlaybackTowerMap = {}
+    currentActionIndex = 1
+    State.MacroPlaying = true
+    State.MacroRecording = false
+    StatusPlaybackText = "▶️ Воспроизведение запущено..."
+end
+
+local function stopPlayback()
+    State.MacroPlaying = false
+    StatusPlaybackText = "⏹️ Воспроизведение остановлено."
+end
+
+local function saveMacroToFile()
+    if #MacroActions == 0 then return false, "Макрос пуст!" end
+    local ok, encoded = pcall(HttpService.JSONEncode, HttpService, MacroActions)
+    if ok and encoded then
+        writefile(State.MacroFile, encoded)
+        return true, "Сохранено " .. #MacroActions .. " действий в " .. State.MacroFile
+    end
+    return false, "Ошибка JSON"
+end
+
+local function loadMacroFromFile()
+    local rf = rawget(getgenv and getgenv() or _G, "readfile") or readfile
+    local isf = rawget(getgenv and getgenv() or _G, "isfile") or isfile
+    if not isf(State.MacroFile) then return false, "Файл не найден!" end
+    local content = rf(State.MacroFile)
+    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, content)
+    if ok and decoded and type(decoded) == "table" then
+        MacroActions = decoded
+        return true, "Загружено " .. #MacroActions .. " действий из " .. State.MacroFile
+    end
+    return false, "Ошибка парсинга JSON"
+end
+
+-- Цикл записи башен
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        if State.MacroRecording and SharedClass then
+            local currentWave = getCurrentWave()
+            local tpFolder = Workspace:FindFirstChild("Towers") and Workspace.Towers:FindFirstChild("TouchParts")
+            local activeUids = {}
+
+            if tpFolder then
+                for _, tp in ipairs(tpFolder:GetChildren()) do
+                    local uid = tp:GetAttribute("uid")
+                    if uid then
+                        local obj = SharedClass.GetById(uid)
+                        if obj and obj.isOwner and obj.position then
+                            activeUids[uid] = true
+
+                            if not TrackedTowers[uid] then
+                                local id = nextMacroIdCounter
+                                nextMacroIdCounter = nextMacroIdCounter + 1
+                                TrackedTowers[uid] = {
+                                    macroId = id,
+                                    name = obj.name,
+                                    x = obj.position.X,
+                                    z = obj.position.Z,
+                                    star = obj.starCount or 0
+                                }
+                                table.insert(MacroActions, {
+                                    type = "BUILD",
+                                    macroId = id,
+                                    name = obj.name,
+                                    x = obj.position.X,
+                                    z = obj.position.Z,
+                                    wave = currentWave
+                                })
+                            else
+                                local tracked = TrackedTowers[uid]
+                                local curStar = obj.starCount or 0
+                                if curStar > tracked.star then
+                                    tracked.star = curStar
+                                    table.insert(MacroActions, {
+                                        type = "UPGRADE_STAR",
+                                        macroId = tracked.macroId,
+                                        star = curStar,
+                                        wave = currentWave
+                                    })
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            for uid, tracked in pairs(TrackedTowers) do
+                if not activeUids[uid] then
+                    table.insert(MacroActions, {
+                        type = "SELL",
+                        macroId = tracked.macroId,
+                        wave = currentWave
+                    })
+                    TrackedTowers[uid] = nil
+                end
+            end
+        end
+    end
+end)
+
+-- Цикл выполнения макроса
+task.spawn(function()
+    while true do
+        task.wait(0.35)
+        if State.MacroPlaying then
+            if currentActionIndex > #MacroActions then
+                StatusPlaybackText = "✅ Все действия выполнены!"
+                if State.MacroAutoLoop and getCurrentWave() == 1 and currentActionIndex > 1 then
+                    task.wait(2)
+                    startPlayback()
+                end
+            else
+                local action = MacroActions[currentActionIndex]
+                local curWave = getCurrentWave()
+                local curMoney = getMoney()
+
+                if curWave < action.wave then
+                    StatusPlaybackText = string.format("⏳ Ожидание волны %d (текущая: %d) [%d/%d]", action.wave, curWave, currentActionIndex, #MacroActions)
+                else
+                    if action.type == "BUILD" then
+                        local cost = getTowerBuildCost(action.name)
+                        if curMoney < cost then
+                            StatusPlaybackText = string.format("💰 Копим на %s: $%d / $%d (волна %d)", action.name, curMoney, cost, action.wave)
+                        else
+                            StatusPlaybackText = string.format("🔨 Строим %s на (%.0f, %.0f)...", action.name, action.x, action.z)
+                            local tb = ReplicatedStorage.channels:FindFirstChild("TowerBuilding")
+                            if tb then
+                                tb:FireServer(Vector2.new(action.x, action.z), action.name)
+                            end
+                            task.wait(0.5)
+
+                            local newTower = findTowerNear(action.x, action.z, 6)
+                            if newTower then
+                                PlaybackTowerMap[action.macroId] = newTower
+                            end
+                            currentActionIndex = currentActionIndex + 1
+                        end
+                    elseif action.type == "UPGRADE_STAR" then
+                        local targetTower = PlaybackTowerMap[action.macroId]
+                        if not targetTower or targetTower.isDestroyed then
+                            targetTower = findTowerNear(action.x or 0, action.z or 0, 10)
+                        end
+
+                        if not targetTower or targetTower.isDestroyed then
+                            currentActionIndex = currentActionIndex + 1
+                        else
+                            local starCost = targetTower.priceHandler and targetTower.priceHandler:GetStarCost() or 150
+                            if curMoney < starCost then
+                                StatusPlaybackText = string.format("💰 Копим на апгрейд #%d: $%d / $%d (волна %d)", action.macroId, curMoney, starCost, action.wave)
+                            else
+                                StatusPlaybackText = string.format("⚡ Апгрейд башни #%d (звезда %d)...", action.macroId, action.star)
+                                doUpgrade(targetTower.model)
+                                task.wait(0.4)
+                                currentActionIndex = currentActionIndex + 1
+                            end
+                        end
+                    elseif action.type == "SELL" then
+                        local targetTower = PlaybackTowerMap[action.macroId]
+                        if targetTower and not targetTower.isDestroyed then
+                            StatusPlaybackText = string.format("🗑️ Продаем башню #%d (волна %d)...", action.macroId, action.wave)
+                            doSell(targetTower.model)
+                            task.wait(0.3)
+                        end
+                        currentActionIndex = currentActionIndex + 1
+                    elseif action.type == "SKIP" then
+                        StatusPlaybackText = string.format("⏩ Скипаем волну %d...", action.wave)
+                        triggerSkip()
+                        task.wait(0.3)
+                        currentActionIndex = currentActionIndex + 1
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- // ==============================================================================
+-- //   ДРОНЫ: ВЫЗОВ, АНТИ-УГОН, УНИЧТОЖЕНИЕ
+-- // ==============================================================================
 local myDroneModel = nil
 local myDroneSeat = nil
 
@@ -345,6 +644,7 @@ local function autoDestroyOtherDrones()
     end
 end
 
+-- // Break Click Drone (через клик мышкой)
 Mouse.Button1Down:Connect(function()
     if State.BreakClickDrone and Mouse.Target then
         local targetObj = Mouse.Target
@@ -380,6 +680,9 @@ Mouse.Button1Down:Connect(function()
     end
 end)
 
+-- // ==============================================================================
+-- //   КАСТОМНЫЕ МОДЕЛИ MACHINEGUN (TF2 SENTRY - СИНХРОНИЗАЦИЯ С UP И СКРЫТИЕ ДЕТАЛЕЙ)
+-- // ==============================================================================
 local function loadMGModels()
     for name, assetId in pairs(MG_MODELS) do
         if not loadedMGAssets[name] then
@@ -486,6 +789,9 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
+-- // ==============================================================================
+-- //   TOWER SIZING, EFFECTS, OUTLINES
+-- // ==============================================================================
 local function setTowerScale(model, scale)
     if not model or not model:IsA("Model") then return end
     if not model.PrimaryPart then
@@ -541,6 +847,9 @@ local function updateTowerVisuals()
     end
 end
 
+-- // ==============================================================================
+-- //   MONSTER ESP (ДИСТАНЦИЯ И ИМЯ)
+-- // ==============================================================================
 local function updateMonsterESP()
     local mFolder = Workspace:FindFirstChild("Monsters")
     if not mFolder then return end
@@ -602,6 +911,9 @@ local function updateMonsterESP()
     end
 end
 
+-- // ==============================================================================
+-- //   PLAYER ESP (MONEY, USERNAME, KILLS)
+-- // ==============================================================================
 local function updatePlayerESP()
     if not State.PlayerESP then return end
     for _, p in ipairs(Players:GetPlayers()) do
@@ -674,6 +986,9 @@ local function updatePlayerESP()
     end
 end
 
+-- // ==============================================================================
+-- //   СКИНЧЕНДЖЕР (SLENDXNT MORPH)
+-- // ==============================================================================
 local function getDonor()
     for _, p in ipairs(Players:GetPlayers()) do
         if p.UserId == DONOR_ID or string.lower(p.Name) == string.lower(DONOR_NAME) then
@@ -763,6 +1078,9 @@ local function revertSkin(m)
     skinBackups[m] = nil
 end
 
+-- // ==============================================================================
+-- //   РАДУЖНЫЙ РАДИУС
+-- // ==============================================================================
 RunService.RenderStepped:Connect(function()
     if not State.RainbowRadius then return end
     local color = Color3.fromHSV((tick() * 0.4) % 1, 0.9, 1)
@@ -782,6 +1100,9 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
+-- // ==============================================================================
+-- //   АВТОСКИП (WAVE TRACKER & AUTO SKIP BUTTON)
+-- // ==============================================================================
 local autoSkipGui = nil
 local lastSpawnTime = tick()
 local lastMonsterCount = 0
@@ -843,6 +1164,7 @@ local function createAutoSkipGUI()
     end)
 end
 
+-- // Цикл скипа и трекинга прогресса
 task.spawn(function()
     while true do
         task.wait(0.2)
@@ -887,6 +1209,9 @@ task.spawn(function()
     end
 end)
 
+-- // ==============================================================================
+-- //   PLAYER FUNCTIONS (WALKSPEED, JUMP, NOCLIP, EMOTIONS)
+-- // ==============================================================================
 RunService.RenderStepped:Connect(function(dt)
     local char = lp.Character
     if not char then return end
@@ -1030,9 +1355,12 @@ task.spawn(function()
     end
 end)
 
+-- // ==============================================================================
+-- //   СОЗДАНИЕ ОКНА OBSIDIAN
+-- // ==============================================================================
 local Window = Library:CreateWindow({
     Title = "TSUM [BETA] 2.1 | Omni-Suite",
-    Footer = "Tsum | MTD Clan Suite by Slend & Tol1kz_dev",
+    Footer = "Tsum | MTD Clan Suite by Slend & Vanta",
     Icon = "terminal",
     NotifySide = "Right",
     ShowCustomCursor = false,
@@ -1043,6 +1371,7 @@ local Window = Library:CreateWindow({
 
 local Tabs = {
     Main     = Window:AddTab("Home", "home"),
+    AutoPlay = Window:AddTab("Auto Play", "play"),
     Player   = Window:AddTab("Player", "user"),
     Target   = Window:AddTab("Target", "crosshair"),
     Towers   = Window:AddTab("Towers", "shield"),
@@ -1055,18 +1384,19 @@ Library.AccentColor = Color3.fromRGB(255, 170, 0)
 Library.MainColor = Color3.fromRGB(255, 255, 255)
 Library.BackgroundColor = Color3.fromRGB(20, 20, 24)
 
+-- ==================== Вкладка Home ====================
 local HomeLeft = Tabs.Main:AddLeftGroupbox("Auto Skip & Waves", "zap")
 local HomeRight = Tabs.Main:AddRightGroupbox("Mass Tower Automation", "coins")
 
 HomeLeft:AddCheckbox("AutoSkipToggle", {
-    Text = "Auto Skip",
+    Text = "Авто-скип волны (Auto Skip)",
     Default = State.AutoSkip,
     Icon = "terminal",
     Callback = function(v) State.AutoSkip = v end
 })
 
 HomeLeft:AddButton({
-    Text = "Show/Unshow AutoSkip GUI",
+    Text = "Показать/Скрыть AutoSkip GUI",
     Func = function()
         if autoSkipGui and autoSkipGui.Enabled then
             autoSkipGui.Enabled = false
@@ -1078,44 +1408,46 @@ HomeLeft:AddButton({
     end
 })
 
-local TotalMoneyLabel = HomeRight:AddLabel("Balance: $0", true)
-local TotalUpgradeLabel = HomeRight:AddLabel("Upgrade All Towers: $0", true)
-local TotalSellLabel = HomeRight:AddLabel("Sell All Towers: +$0", true)
+local TotalMoneyLabel = HomeRight:AddLabel("Баланс: $0", true)
+local TotalUpgradeLabel = HomeRight:AddLabel("Апгрейд всех: $0", true)
+local TotalSellLabel = HomeRight:AddLabel("Продажа всех: +$0", true)
 
 HomeRight:AddCheckbox("AutoUpgradeAllToggle", {
-    Text = "Auto Upgrade All Towers",
+    Text = "⚡ Авто-апгрейд всех башен",
     Default = State.AutoUpgradeAll,
     Icon = "terminal",
     Callback = function(v) State.AutoUpgradeAll = v end
 })
 
 HomeRight:AddButton({
-    Text = "Upgrade All Towers",
+    Text = "⚡ Апнуть все башни",
     Func = function()
         task.spawn(upgradeAllTowers)
     end
 })
 
 HomeRight:AddButton({
-    Text = "Sell All Towers",
+    Text = "🗑️ Продать все башни",
     Func = function()
         task.spawn(sellAllTowers)
     end
 })
 
+-- Обновление финансовых показателей
 task.spawn(function()
     while true do
         task.wait(0.8)
         pcall(function()
             local upgCost, sellReturn, count, upgCount = getTowersFinancials()
             local money = getMoney()
-            TotalMoneyLabel:SetText(string.format("Balance: $%s", money))
-            TotalUpgradeLabel:SetText(string.format("Upgrade All (%d): $%d", upgCount, upgCost))
-            TotalSellLabel:SetText(string.format("Sell All (%d): +$%d", count, sellReturn))
+            TotalMoneyLabel:SetText(string.format("Баланс: $%s", money))
+            TotalUpgradeLabel:SetText(string.format("Апгрейд всех (%d): $%d", upgCount, upgCost))
+            TotalSellLabel:SetText(string.format("Продажа всех (%d): +$%d", count, sellReturn))
         end)
     end
 end)
 
+-- Авто-апгрейд всех башен при наличии денег
 task.spawn(function()
     while true do
         task.wait(1)
@@ -1135,6 +1467,102 @@ task.spawn(function()
     end
 end)
 
+-- ==================== Вкладка Auto Play ====================
+local MacroLeft = Tabs.AutoPlay:AddLeftGroupbox("Запись действий (Recorder)", "radio")
+local MacroRight = Tabs.AutoPlay:AddRightGroupbox("Воспроизведение (Playback)", "play")
+
+local MacroRecStatusLabel = MacroLeft:AddLabel("Статус: Ожидание", true)
+local MacroActionsCountLabel = MacroLeft:AddLabel("Записано действий: 0", true)
+
+MacroLeft:AddButton({
+    Text = "🔴 Начать запись (Record)",
+    Func = function()
+        startRecording()
+        MacroRecStatusLabel:SetText("Статус: 🔴 ИДЕТ ЗАПИСЬ...")
+    end
+})
+
+MacroLeft:AddButton({
+    Text = "⏹️ Остановить запись",
+    Func = function()
+        stopRecording()
+        MacroRecStatusLabel:SetText("Статус: Остановлена")
+    end
+})
+
+MacroLeft:AddCheckbox("MacroRecordSkipsToggle", {
+    Text = "Записывать скипы волны",
+    Default = State.MacroRecordSkips,
+    Icon = "terminal",
+    Callback = function(v) State.MacroRecordSkips = v end
+})
+
+MacroLeft:AddButton({
+    Text = "💾 Сохранить в mtd_macro.json",
+    Func = function()
+        local ok, msg = saveMacroToFile()
+        MacroRecStatusLabel:SetText(ok and "✅ " .. msg or "❌ " .. msg)
+    end
+})
+
+MacroLeft:AddButton({
+    Text = "📂 Загрузить из mtd_macro.json",
+    Func = function()
+        local ok, msg = loadMacroFromFile()
+        MacroRecStatusLabel:SetText(ok and "✅ " .. msg or "❌ " .. msg)
+        MacroActionsCountLabel:SetText("Записано действий: " .. #MacroActions)
+    end
+})
+
+MacroLeft:AddButton({
+    Text = "🧹 Очистить макрос",
+    Func = function()
+        MacroActions = {}
+        TrackedTowers = {}
+        MacroActionsCountLabel:SetText("Записано действий: 0")
+        MacroRecStatusLabel:SetText("Статус: Очищено")
+    end
+})
+
+local MacroPlayStatusLabel = MacroRight:AddLabel("Статус: Выключен", true)
+local MacroStepProgressLabel = MacroRight:AddLabel("Шаг: 0 / 0", true)
+
+MacroRight:AddButton({
+    Text = "▶️ Начать Auto Play (Воспроизведение)",
+    Func = function()
+        startPlayback()
+    end
+})
+
+MacroRight:AddButton({
+    Text = "⏹️ Остановить Auto Play",
+    Func = function()
+        stopPlayback()
+    end
+})
+
+MacroRight:AddCheckbox("MacroAutoLoopToggle", {
+    Text = "Авто-повтор в следующей катке",
+    Default = State.MacroAutoLoop,
+    Icon = "terminal",
+    Callback = function(v) State.MacroAutoLoop = v end
+})
+
+-- Обновление UI макроса
+task.spawn(function()
+    while true do
+        task.wait(0.4)
+        pcall(function()
+            MacroActionsCountLabel:SetText(string.format("Записано действий: %d", #MacroActions))
+            MacroPlayStatusLabel:SetText("Статус: " .. StatusPlaybackText)
+            local total = #MacroActions
+            local cur = math.min(currentActionIndex, total)
+            MacroStepProgressLabel:SetText(string.format("Шаг: %d / %d (Волна: %d)", cur, total, getCurrentWave()))
+        end)
+    end
+end)
+
+-- ==================== Вкладка Player ====================
 local PlayerLeft = Tabs.Player:AddLeftGroupbox("Character", "zap")
 local PlayerRight = Tabs.Player:AddRightGroupbox("Players & Animations", "user")
 
@@ -1336,7 +1764,7 @@ local function getClosestTower(maxDist)
 end
 
 TowersLeft:AddButton({
-    Text = "Upgrade Closest Tower (15 studs)",
+    Text = "Апнуть ближайшую башню (15 studs)",
     Func = function()
         task.spawn(function()
             local t = getClosestTower(15)
@@ -1346,7 +1774,7 @@ TowersLeft:AddButton({
 })
 
 TowersLeft:AddButton({
-    Text = "Sell Closest Tower (15 studs)",
+    Text = "Продать ближайшую башню (15 studs)",
     Func = function()
         task.spawn(function()
             local t = getClosestTower(15)
@@ -1416,7 +1844,7 @@ VisualsLeft:AddCheckbox("PlayerESPToggle", {
 })
 
 VisualsRight:AddCheckbox("SkinchangerToggle", {
-    Text = "Skin Changer (SlendxNT Test Morph)",
+    Text = "Скинченджер (SlendxNT Morph)",
     Default = false,
     Icon = "terminal",
     Callback = function(v)
@@ -1431,14 +1859,14 @@ VisualsRight:AddCheckbox("SkinchangerToggle", {
 })
 
 VisualsRight:AddCheckbox("RainbowRadiusToggle", {
-    Text = "Rainbow Radius",
+    Text = "Радужный радиус",
     Default = State.RainbowRadius,
     Icon = "terminal",
     Callback = function(v) State.RainbowRadius = v end
 })
 
 VisualsRight:AddCheckbox("CustomMGToggle", {
-    Text = "Custom MachineGun Model (TF2 Sentry)",
+    Text = "Кастом MachineGun (TF2 Sentry)",
     Default = State.CustomMG,
     Icon = "terminal",
     Callback = function(v)
@@ -1448,7 +1876,7 @@ VisualsRight:AddCheckbox("CustomMGToggle", {
 })
 
 VisualsRight:AddSlider("SentryHeightSlider", {
-    Text = "Height Offset",
+    Text = "Высота турели (Height Offset)",
     Default = State.SentryHeight,
     Min = 0.0,
     Max = 10.0,
@@ -1459,7 +1887,7 @@ VisualsRight:AddSlider("SentryHeightSlider", {
 })
 
 VisualsRight:AddSlider("SentryRotSlider", {
-    Text = "Rotation",
+    Text = "Поворот турели (Rotation)",
     Default = State.SentryRotation,
     Min = 0,
     Max = 360,
@@ -1474,21 +1902,21 @@ local DronLeft = Tabs.Dron:AddLeftGroupbox("Drone Owner", "bot")
 local DronRight = Tabs.Dron:AddRightGroupbox("Drone Destroyer", "flame")
 
 DronLeft:AddButton({
-    Text = "Claim / Spawn your drone",
+    Text = "Захватить / Заспавнить свой дрон",
     Func = function()
         task.spawn(claimDrone)
     end
 })
 
 DronLeft:AddCheckbox("AntiDroneToggle", {
-    Text = "Anti-Drone (Automate take back if stolen",
+    Text = "Anti-Drone (Авто-отбор если угнали)",
     Default = State.AntiDrone,
     Icon = "terminal",
     Callback = function(v) State.AntiDrone = v end
 })
 
 DronRight:AddButton({
-    Text = "🔥 Destroy empty drone (1 sec)",
+    Text = "🔥 Снести чужой пустой дрон (Fakeout)",
     Func = function()
         task.spawn(autoDestroyOtherDrones)
     end
@@ -1520,4 +1948,4 @@ task.spawn(function()
     end
 end)
 
-print("[TSUM & MTD] UI succefully Loaded!")
+print("MTD Script Loaded!")
