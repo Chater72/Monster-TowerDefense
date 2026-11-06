@@ -16,12 +16,15 @@ local pgui = lp:WaitForChild("PlayerGui")
 local Mouse = lp:GetMouse()
 
 local State = {
-    AutoSkip = true,
+    AutoSkip = false,
     AutoUpgradeAll = false,
     MacroRecording = false,
     MacroPlaying = false,
     MacroAutoLoop = true,
     MacroRecordSkips = true,
+    MacroAutoMaxSpeed = true,
+    MacroSelectedTactic = "Тактика_1",
+    MacroNewTacticName = "Тактика_1",
     MacroFile = "mtd_macro.json",
     RainbowRadius = true,
     TowerHelper = true,
@@ -177,30 +180,106 @@ local function doUpgrade(targetModel)
     return true
 end
 
+-- // Автоматическая установка максимальной скорости (X2 / X3)
+local function setMaxSpeed()
+    pcall(function()
+        local TimeScaleChanger = require(ReplicatedStorage.Services.MicroServices.TimeScaleChanger)
+        local tsFrame = pgui:FindFirstChild("MainGui")
+            and pgui.MainGui:FindFirstChild("Overlay")
+            and pgui.MainGui.Overlay:FindFirstChild("RightPanel")
+            and pgui.MainGui.Overlay.RightPanel:FindFirstChild("quit")
+            and pgui.MainGui.Overlay.RightPanel.quit:FindFirstChild("TimeScaleFrame")
+        local expandFrame = tsFrame and tsFrame:FindFirstChild("expandFrame")
+        local bestMod = 2
+        if expandFrame and expandFrame:FindFirstChild("buttons") then
+            for _, btn in ipairs(expandFrame.buttons:GetChildren()) do
+                if btn:IsA("GuiButton") then
+                    local mod = btn:GetAttribute("mod")
+                    local locked = btn:FindFirstChild("locked")
+                    local isLocked = locked and locked.Visible
+                    if mod and not isLocked and mod > bestMod then
+                        bestMod = mod
+                    end
+                end
+            end
+        end
+        TimeScaleChanger.ClientTryChange(bestMod)
+    end)
+end
+
+-- // Надежная продажа башни (Авто удаление без застреваний)
 local function doSell(targetModel)
-    if targetModel then
-        selectTower(targetModel)
-        task.wait(0.04)
+    if not targetModel then return false end
+
+    -- 1. Вызываем продажу напрямую на сервере через объект SharedClass
+    local towerObj = nil
+    if SharedClass then
+        local tpFolder = Workspace:FindFirstChild("Towers") and Workspace.Towers:FindFirstChild("TouchParts")
+        if tpFolder then
+            for _, tp in ipairs(tpFolder:GetChildren()) do
+                local uid = tp:GetAttribute("uid")
+                if uid then
+                    local obj = SharedClass.GetById(uid)
+                    if obj and (obj.model == targetModel or obj.instance == targetModel) then
+                        towerObj = obj
+                        break
+                    end
+                end
+            end
+        end
     end
+
+    if towerObj and towerObj.RemoteCall then
+        pcall(function()
+            towerObj:RemoteCall("Sell")
+        end)
+    end
+
+    -- 2. Клиентский UI: выбор башни и нажатие кнопки продажи
+    selectTower(targetModel)
+    task.wait(0.02)
 
     local mainGui = pgui:FindFirstChild("MainGui")
-    if not mainGui then return false end
+    if mainGui then
+        local tm = mainGui:FindFirstChild("TowerModule", true)
+        local tmMod = tm and require(tm)
+        if tmMod and tmMod.SellTower then
+            task.spawn(function()
+                pcall(tmMod.SellTower)
+            end)
+        end
 
-    local tm = mainGui:FindFirstChild("TowerModule", true)
-    local tmMod = tm and require(tm)
-    if tmMod and tmMod.SellTower then
-        pcall(tmMod.SellTower)
-    end
+        local sellBtn = mainGui:FindFirstChild("TowerFrame") and mainGui.TowerFrame:FindFirstChild("SellButton")
+        if sellBtn then fireClick(sellBtn) end
 
-    local sellBtn = mainGui:FindFirstChild("TowerFrame") and mainGui.TowerFrame:FindFirstChild("SellButton")
-    if sellBtn then fireClick(sellBtn) end
+        -- Проверяем ActionPrompt ТОЛЬКО если это диалог продажи башни
+        task.wait(0.04)
+        local prompt = mainGui:FindFirstChild("ActionPrompt")
+        if prompt and prompt.Visible then
+            local txt = prompt:FindFirstChild("Tooltip") and prompt.Tooltip:FindFirstChild("Text") and prompt.Tooltip.Text.Text or ""
+            local lowerTxt = string.lower(txt)
+            if string.find(lowerTxt, "продать") or string.find(lowerTxt, "sell") or string.find(lowerTxt, "башн") then
+                local am = prompt:FindFirstChild("ActionModule")
+                if am then
+                    pcall(function()
+                        local mod = require(am)
+                        if mod.waiting then
+                            mod.waiting = nil
+                            mod.result = true
+                        end
+                    end)
+                end
+                if _G.ActionModule and _G.ActionModule.waiting then
+                    _G.ActionModule.waiting = nil
+                    _G.ActionModule.result = true
+                end
+                prompt.Visible = false
+            end
+        end
 
-    task.wait(0.06)
-    local prompt = mainGui:FindFirstChild("ActionPrompt")
-    if prompt and prompt.Visible then
-        local cf = prompt:FindFirstChild("choiceFrame")
-        local conf = cf and (cf:FindFirstChild("confirm") or cf:FindFirstChild("Yes") or cf:FindFirstChild("Button"))
-        if conf then fireClick(conf) end
+        if tmMod and tmMod.Disable then
+            pcall(tmMod.Disable)
+        end
     end
     return true
 end
@@ -324,6 +403,85 @@ local function findTowerNear(x, z, maxDist)
     return bestObj
 end
 
+local TACTICS_DIR = "mtd_tactics"
+if not isfolder(TACTICS_DIR) then
+    pcall(makefolder, TACTICS_DIR)
+end
+
+local function sanitizeName(name)
+    if not name or name == "" then return "Тактика_1" end
+    name = name:gsub("[^%w_%-%sа-яА-ЯёЁ]", ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if name == "" then name = "Тактика_1" end
+    return name
+end
+
+local function getTacticList()
+    local list = {}
+    if not isfolder(TACTICS_DIR) then
+        pcall(makefolder, TACTICS_DIR)
+    end
+    local files = pcall(listfiles, TACTICS_DIR) and listfiles(TACTICS_DIR) or {}
+    for _, path in ipairs(files) do
+        local n = path:match("([^/\\]+)%.json$")
+        if n then
+            table.insert(list, n)
+        end
+    end
+    if #list == 0 then
+        table.insert(list, "Тактика_1")
+    end
+    return list
+end
+
+local function saveTactic(name)
+    if #MacroActions == 0 then
+        return false, "Макрос пуст! Нечего сохранять."
+    end
+    local safeName = sanitizeName(name)
+    local fullPath = TACTICS_DIR .. "/" .. safeName .. ".json"
+    local ok, encoded = pcall(HttpService.JSONEncode, HttpService, MacroActions)
+    if not ok or not encoded then
+        return false, "Ошибка кодирования JSON!"
+    end
+    local writeOk, err = pcall(writefile, fullPath, encoded)
+    if not writeOk then
+        return false, "Ошибка записи: " .. tostring(err)
+    end
+    return true, "Тактика '" .. safeName .. "' сохранена (" .. #MacroActions .. " действий)!"
+end
+
+local function loadTactic(name)
+    local safeName = sanitizeName(name)
+    local fullPath = TACTICS_DIR .. "/" .. safeName .. ".json"
+    local isf = rawget(getgenv and getgenv() or _G, "isfile") or isfile
+    local rf = rawget(getgenv and getgenv() or _G, "readfile") or readfile
+    if not isf(fullPath) then
+        return false, "Тактика '" .. safeName .. "' не найдена!"
+    end
+    local content = rf(fullPath)
+    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, content)
+    if ok and decoded and type(decoded) == "table" then
+        MacroActions = decoded
+        currentActionIndex = 1
+        PlaybackTowerMap = {}
+        StatusPlaybackText = string.format("Загружено %d действий. Готов к Auto Play.", #MacroActions)
+        return true, "Загружено " .. #MacroActions .. " действий из '" .. safeName .. "'!"
+    end
+    return false, "Ошибка чтения / поврежденный файл!"
+end
+
+local function deleteTactic(name)
+    local safeName = sanitizeName(name)
+    local fullPath = TACTICS_DIR .. "/" .. safeName .. ".json"
+    local isf = rawget(getgenv and getgenv() or _G, "isfile") or isfile
+    local df = rawget(getgenv and getgenv() or _G, "delfile") or delfile
+    if not isf(fullPath) then
+        return false, "Файл не существует!"
+    end
+    pcall(df, fullPath)
+    return true, "Тактика '" .. safeName .. "' удалена!"
+end
+
 local function startRecording()
     MacroActions = {}
     TrackedTowers = {}
@@ -331,6 +489,7 @@ local function startRecording()
     State.MacroRecording = true
     State.MacroPlaying = false
 
+    -- Регистрируем уже стоящие башни ТОЛЬКО для отслеживания (не добавляем их в список действий)
     local tpFolder = Workspace:FindFirstChild("Towers") and Workspace.Towers:FindFirstChild("TouchParts")
     if tpFolder and SharedClass then
         for _, tp in ipairs(tpFolder:GetChildren()) do
@@ -347,14 +506,6 @@ local function startRecording()
                         z = obj.position.Z,
                         star = obj.starCount or 0
                     }
-                    table.insert(MacroActions, {
-                        type = "BUILD",
-                        macroId = id,
-                        name = obj.name,
-                        x = obj.position.X,
-                        z = obj.position.Z,
-                        wave = getCurrentWave()
-                    })
                 end
             end
         end
@@ -375,34 +526,15 @@ local function startPlayback()
     State.MacroPlaying = true
     State.MacroRecording = false
     StatusPlaybackText = "▶️ Воспроизведение запущено..."
+
+    if State.MacroAutoMaxSpeed then
+        setMaxSpeed()
+    end
 end
 
 local function stopPlayback()
     State.MacroPlaying = false
     StatusPlaybackText = "⏹️ Воспроизведение остановлено."
-end
-
-local function saveMacroToFile()
-    if #MacroActions == 0 then return false, "Макрос пуст!" end
-    local ok, encoded = pcall(HttpService.JSONEncode, HttpService, MacroActions)
-    if ok and encoded then
-        writefile(State.MacroFile, encoded)
-        return true, "Сохранено " .. #MacroActions .. " действий в " .. State.MacroFile
-    end
-    return false, "Ошибка JSON"
-end
-
-local function loadMacroFromFile()
-    local rf = rawget(getgenv and getgenv() or _G, "readfile") or readfile
-    local isf = rawget(getgenv and getgenv() or _G, "isfile") or isfile
-    if not isf(State.MacroFile) then return false, "Файл не найден!" end
-    local content = rf(State.MacroFile)
-    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, content)
-    if ok and decoded and type(decoded) == "table" then
-        MacroActions = decoded
-        return true, "Загружено " .. #MacroActions .. " действий из " .. State.MacroFile
-    end
-    return false, "Ошибка парсинга JSON"
 end
 
 -- Цикл записи башен
@@ -477,6 +609,10 @@ task.spawn(function()
     while true do
         task.wait(0.35)
         if State.MacroPlaying then
+            if State.MacroAutoMaxSpeed then
+                setMaxSpeed()
+            end
+
             if currentActionIndex > #MacroActions then
                 StatusPlaybackText = "✅ Все действия выполнены!"
                 if State.MacroAutoLoop and getCurrentWave() == 1 and currentActionIndex > 1 then
@@ -497,9 +633,31 @@ task.spawn(function()
                             StatusPlaybackText = string.format("💰 Копим на %s: $%d / $%d (волна %d)", action.name, curMoney, cost, action.wave)
                         else
                             StatusPlaybackText = string.format("🔨 Строим %s на (%.0f, %.0f)...", action.name, action.x, action.z)
-                            local tb = ReplicatedStorage.channels:FindFirstChild("TowerBuilding")
-                            if tb then
-                                tb:FireServer(Vector2.new(action.x, action.z), action.name)
+                            local placed = false
+                            pcall(function()
+                                local ConstructionService = require(ReplicatedStorage.Services.ConstructionService)
+                                if ConstructionService and ConstructionService.ClientBuild then
+                                    ConstructionService.ClientBuild(Vector2.new(action.x, action.z), action.name)
+                                    placed = true
+                                end
+                            end)
+
+                            if not placed then
+                                pcall(function()
+                                    local net = require(ReplicatedStorage.staticModules.generics.net)
+                                    local ch = net.Get("TowerBuilding")
+                                    if ch then
+                                        ch:Fire(Vector2.new(action.x, action.z), action.name)
+                                        placed = true
+                                    end
+                                end)
+                            end
+
+                            if not placed then
+                                local tb = ReplicatedStorage.channels:FindFirstChild("TowerBuilding")
+                                if tb then
+                                    tb:FireServer(Vector2.new(action.x, action.z), action.name)
+                                end
                             end
                             task.wait(0.5)
 
@@ -1468,60 +1626,110 @@ task.spawn(function()
 end)
 
 -- ==================== Вкладка Auto Play ====================
-local MacroLeft = Tabs.AutoPlay:AddLeftGroupbox("Запись действий (Recorder)", "radio")
-local MacroRight = Tabs.AutoPlay:AddRightGroupbox("Воспроизведение (Playback)", "play")
+local MacroLeft = Tabs.AutoPlay:AddLeftGroupbox("Управление тактиками", "folder")
+local MacroRight = Tabs.AutoPlay:AddRightGroupbox("Запись и Воспроизведение", "play")
 
-local MacroRecStatusLabel = MacroLeft:AddLabel("Статус: Ожидание", true)
-local MacroActionsCountLabel = MacroLeft:AddLabel("Записано действий: 0", true)
+-- Поле ввода имени новой тактики
+local MacroTacticInput = MacroLeft:AddInput("MacroTacticNameInput", {
+    Default = State.MacroNewTacticName,
+    Numeric = false,
+    Finished = false,
+    Text = "Название новой тактики",
+    Placeholder = "Введите имя тактики...",
+    Callback = function(val)
+        State.MacroNewTacticName = val
+    end
+})
+
+-- Выпадающий список всех тактик
+local MacroTacticDropdown = MacroLeft:AddDropdown("MacroTacticSelector", {
+    Values = getTacticList(),
+    Default = 1,
+    Multi = false,
+    Text = "Список сохраненных тактик",
+    Callback = function(val)
+        State.MacroSelectedTactic = val
+    end
+})
+
+local MacroTacticStatusLabel = MacroLeft:AddLabel("Статус: Готов", true)
 
 MacroLeft:AddButton({
+    Text = "💾 Сохранить тактику",
+    Func = function()
+        local nameToSave = State.MacroNewTacticName
+        if not nameToSave or nameToSave == "" then
+            nameToSave = State.MacroSelectedTactic
+        end
+        local ok, msg = saveTactic(nameToSave)
+        MacroTacticStatusLabel:SetText(ok and "✅ " .. msg or "❌ " .. msg)
+        MacroTacticDropdown:SetValues(getTacticList())
+        MacroTacticDropdown:SetValue(sanitizeName(nameToSave))
+    end
+})
+
+MacroLeft:AddButton({
+    Text = "📂 Загрузить выбранную тактику",
+    Func = function()
+        local ok, msg = loadTactic(State.MacroSelectedTactic)
+        MacroTacticStatusLabel:SetText(ok and "✅ " .. msg or "❌ " .. msg)
+    end
+})
+
+MacroLeft:AddButton({
+    Text = "🗑️ Удалить выбранную тактику",
+    Func = function()
+        local ok, msg = deleteTactic(State.MacroSelectedTactic)
+        MacroTacticStatusLabel:SetText(ok and "✅ " .. msg or "❌ " .. msg)
+        local updated = getTacticList()
+        MacroTacticDropdown:SetValues(updated)
+        MacroTacticDropdown:SetValue(updated[1] or "Тактика_1")
+    end
+})
+
+MacroLeft:AddButton({
+    Text = "🔄 Обновить список тактик",
+    Func = function()
+        local updated = getTacticList()
+        MacroTacticDropdown:SetValues(updated)
+        MacroTacticStatusLabel:SetText("Список тактик обновлен!")
+    end
+})
+
+MacroLeft:AddButton({
+    Text = "🧹 Очистить текущий макрос",
+    Func = function()
+        MacroActions = {}
+        TrackedTowers = {}
+        MacroTacticStatusLabel:SetText("Текущий макрос очищен!")
+    end
+})
+
+-- Правая колонка: Запись и Воспроизведение
+local MacroRecStatusLabel = MacroRight:AddLabel("Запись: Ожидание", true)
+local MacroActionsCountLabel = MacroRight:AddLabel("Записано действий: 0", true)
+
+MacroRight:AddButton({
     Text = "🔴 Начать запись (Record)",
     Func = function()
         startRecording()
-        MacroRecStatusLabel:SetText("Статус: 🔴 ИДЕТ ЗАПИСЬ...")
+        MacroRecStatusLabel:SetText("Запись: 🔴 ИДЕТ ЗАПИСЬ...")
     end
 })
 
-MacroLeft:AddButton({
+MacroRight:AddButton({
     Text = "⏹️ Остановить запись",
     Func = function()
         stopRecording()
-        MacroRecStatusLabel:SetText("Статус: Остановлена")
+        MacroRecStatusLabel:SetText("Запись: Остановлена")
     end
 })
 
-MacroLeft:AddCheckbox("MacroRecordSkipsToggle", {
+MacroRight:AddCheckbox("MacroRecordSkipsToggle", {
     Text = "Записывать скипы волны",
     Default = State.MacroRecordSkips,
     Icon = "terminal",
     Callback = function(v) State.MacroRecordSkips = v end
-})
-
-MacroLeft:AddButton({
-    Text = "💾 Сохранить в mtd_macro.json",
-    Func = function()
-        local ok, msg = saveMacroToFile()
-        MacroRecStatusLabel:SetText(ok and "✅ " .. msg or "❌ " .. msg)
-    end
-})
-
-MacroLeft:AddButton({
-    Text = "📂 Загрузить из mtd_macro.json",
-    Func = function()
-        local ok, msg = loadMacroFromFile()
-        MacroRecStatusLabel:SetText(ok and "✅ " .. msg or "❌ " .. msg)
-        MacroActionsCountLabel:SetText("Записано действий: " .. #MacroActions)
-    end
-})
-
-MacroLeft:AddButton({
-    Text = "🧹 Очистить макрос",
-    Func = function()
-        MacroActions = {}
-        TrackedTowers = {}
-        MacroActionsCountLabel:SetText("Записано действий: 0")
-        MacroRecStatusLabel:SetText("Статус: Очищено")
-    end
 })
 
 local MacroPlayStatusLabel = MacroRight:AddLabel("Статус: Выключен", true)
@@ -1546,6 +1754,23 @@ MacroRight:AddCheckbox("MacroAutoLoopToggle", {
     Default = State.MacroAutoLoop,
     Icon = "terminal",
     Callback = function(v) State.MacroAutoLoop = v end
+})
+
+MacroRight:AddCheckbox("MacroAutoSpeedToggle", {
+    Text = "⚡ Авто-макс. скорость (X2/X3)",
+    Default = State.MacroAutoMaxSpeed,
+    Icon = "zap",
+    Callback = function(v)
+        State.MacroAutoMaxSpeed = v
+        if v then setMaxSpeed() end
+    end
+})
+
+MacroRight:AddButton({
+    Text = "⚡ Включить макс. скорость сейчас",
+    Func = function()
+        setMaxSpeed()
+    end
 })
 
 -- Обновление UI макроса
