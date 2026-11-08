@@ -16,7 +16,7 @@ local pgui = lp:WaitForChild("PlayerGui")
 local Mouse = lp:GetMouse()
 
 local State = {
-    AutoSkip = true,
+    AutoSkip = false,
     AutoUpgradeAll = false,
     MacroRecording = false,
     MacroPlaying = false,
